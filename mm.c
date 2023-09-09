@@ -137,7 +137,7 @@ void *mm_malloc(size_t size) {
   }
 
   // search the free list for a fit
-  if ((bp == find_fit(asize)) != NULL) {
+  if ((bp = find_fit(asize)) != NULL) {
     place(bp, asize);
     return bp;
   }
@@ -190,7 +190,7 @@ void *extend_heap(size_t words) {
   if (words % 2 != 0) {
     size = (words + 1) * WSIZE;
   }
-  if ((bp = mem_sbrk(size)) == (void *)-1) {
+  if ((long)(bp = mem_sbrk(size)) == -1) {
     return NULL;
   }
   // 늘어난 힙 영역대로 헤더 푸터 에필로그 헤더를 재설정한다.
@@ -225,7 +225,8 @@ void *coalesce(byte_p bp) {
 
   if (GET_ALLOC(prev_bp)) {
     // next is freed, 내 헤더와 next의 푸터의 값을 바꾼다.
-    size_t extended_blocksize = GET_SIZE(bp) + GET_SIZE(next_bp);
+    size_t extended_blocksize =
+        GET_SIZE(HEADER_PTR(bp)) + GET_SIZE(HEADER_PTR(next_bp));
     dword_t packed = PACK(extended_blocksize, 0);
 
     PUT(HEADER_PTR(bp), packed);
@@ -236,7 +237,8 @@ void *coalesce(byte_p bp) {
 
   if (GET_ALLOC(next_bp)) {
     // prev is freed, prev의 헤더와 내 푸터의 값을 바꾼다.
-    size_t extended_blocksize = GET_SIZE(bp) + GET_SIZE(prev_bp);
+    size_t extended_blocksize =
+        GET_SIZE(HEADER_PTR(bp)) + GET_SIZE(HEADER_PTR(prev_bp));
     size_t packed = PACK(extended_blocksize, 0);
 
     PUT(HEADER_PTR(prev_bp), packed);
@@ -246,8 +248,9 @@ void *coalesce(byte_p bp) {
   }
 
   // prev, next is freed, prev의 헤더와 next의 푸터의 값을 바꾼다.
-  size_t extended_blocksize =
-      GET_SIZE(prev_bp) + GET_SIZE(bp) + GET_SIZE(next_bp);
+  size_t extended_blocksize = GET_SIZE(HEADER_PTR(prev_bp)) +
+                              GET_SIZE(HEADER_PTR(bp)) +
+                              GET_SIZE(HEADER_PTR(next_bp));
   size_t packed = PACK(extended_blocksize, 0);
 
   PUT(HEADER_PTR(prev_bp), packed);
