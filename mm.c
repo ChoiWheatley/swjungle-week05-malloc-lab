@@ -20,12 +20,17 @@
 #include "memlib.h"
 
 typedef char *byte_p;
+typedef unsigned long dword_t;
 
 int mm_init(void);
 void *mm_malloc(size_t size);
 void *mm_realloc(void *ptr, size_t size);
 static void *extend_heap(size_t words);
 static void *coalesce(byte_p bp);
+static void *find_fit(size_t asize);
+static void *place(void *bp, size_t asize);
+
+void *g_heap_listp;
 
 /*********************************************************
  * NOTE TO STUDENTS: Before you do anything else, please
@@ -81,8 +86,6 @@ team_t team = {
   (void *)((byte_p)(bp) + GET_SIZE(((byte_p)(bp)-WSIZE)))
 // 이전 블럭의 bp(base pointer)를 가리킨다.
 #define PREV_BLOCK_PTR(bp) (void *)((byte_p)(bp)-GET_SIZE(((byte_p)(bp)-DSIZE)))
-
-void *heap_listp;
 ///!SECTION
 
 /*
@@ -95,14 +98,14 @@ void *heap_listp;
  */
 int mm_init(void) {
   // 비어있는 힙 생성
-  if (((heap_listp) = mem_sbrk(4 * WSIZE)) == (void *)-1) {
+  if (((g_heap_listp) = mem_sbrk(4 * WSIZE)) == (void *)-1) {
     return -1;
   }
-  PUT(heap_listp, 0);                             // alignment padding
-  PUT(heap_listp + (1 * WSIZE), PACK(DSIZE, 1));  // prologue header
-  PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1));  // prologue footer
-  PUT(heap_listp + (3 * WSIZE), PACK(0, 1));      // epilogue header
-  heap_listp += (2 * WSIZE);
+  PUT(g_heap_listp, 0);                             // alignment padding
+  PUT(g_heap_listp + (1 * WSIZE), PACK(DSIZE, 1));  // prologue header
+  PUT(g_heap_listp + (2 * WSIZE), PACK(DSIZE, 1));  // prologue footer
+  PUT(g_heap_listp + (3 * WSIZE), PACK(0, 1));      // epilogue header
+  g_heap_listp += (2 * WSIZE);
 
   // Extend the empty heap with a free block of CHUNKSIZE bytes
   if (extend_heap(CHUNKSIZE / WSIZE) == NULL) {
@@ -116,14 +119,36 @@ int mm_init(void) {
  *     Always allocate a block whose size is a multiple of the alignment.
  */
 void *mm_malloc(size_t size) {
-  int newsize = ALIGN(size + SIZE_T_SIZE);
-  void *p = mem_sbrk(newsize);
-  if (p == (void *)-1)
+  size_t asize;       // adjusted block size
+  size_t extendsize;  // amount to extend heap if no fit
+  byte_p bp;
+
+  // ignore spurious requests
+  if (size == 0) {
     return NULL;
-  else {
-    *(size_t *)p = size;
-    return (void *)((char *)p + SIZE_T_SIZE);
   }
+
+  // adjust block size to include overhead and alignment requirements
+  if (size <= DSIZE) {
+    asize = 2 * DSIZE;  // for header and footer
+  } else {
+    // size + header + footer + padding 포함한 DSIZE 기준으로 정렬된 블럭의 크기
+    asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
+  }
+
+  // search the free list for a fit
+  if ((bp == find_fit(asize)) != NULL) {
+    place(bp, asize);
+    return bp;
+  }
+
+  // no fit found. get more memory and place the block
+  extendsize = MAX(asize, CHUNKSIZE);
+  if ((bp = extend_heap(extendsize / WSIZE)) == NULL) {
+    return NULL;
+  }
+  place(bp, asize);
+  return bp;
 }
 
 /*
@@ -201,7 +226,7 @@ void *coalesce(byte_p bp) {
   if (GET_ALLOC(prev_bp)) {
     // next is freed, 내 헤더와 next의 푸터의 값을 바꾼다.
     size_t extended_blocksize = GET_SIZE(bp) + GET_SIZE(next_bp);
-    size_t packed = PACK(extended_blocksize, 0);
+    dword_t packed = PACK(extended_blocksize, 0);
 
     PUT(HEADER_PTR(bp), packed);
     PUT(FOOTER_PTR(next_bp), packed);
@@ -229,4 +254,48 @@ void *coalesce(byte_p bp) {
   PUT(FOOTER_PTR(next_bp), packed);
 
   return prev_bp;
+}
+
+/**
+ * @brief find_fit - first fit을 기준으로 찾아라
+ *
+ * @return asize <= BLOCK_SIZE - 2WSIZE를 만족하는 블럭 포인터 | NULL
+ */
+void *find_fit(size_t asize) {
+  void *cur = g_heap_listp;
+  size_t block_size;
+
+  while ((block_size = GET_SIZE(cur)) > 0) {
+    if (block_size - 2 * WSIZE < asize) {
+      cur = NEXT_BLOCK_PTR(cur);
+      continue;
+    }
+    return (void *)cur;
+  }
+
+  return NULL;
+}
+
+/**
+ * @brief place requested block at the beginning of the free block
+ *
+ * find_fit, extend_heap의 리턴값은 `asize`가 들어갈 공간이 주어진 블럭의
+ * 주소값이다. 우리가 할 건 bp에 헤더와 푸터를 달고 쪼개진 free block에 헤더와
+ * 푸터를 다는 것이다.
+ */
+void *place(void *bp, size_t asize) {
+  size_t old_size = GET_SIZE(HEADER_PTR(bp));
+  dword_t pack_alloc = PACK(asize, 1);  // 새로이 할당한 블럭의 헤더/푸터 값
+  dword_t pack_free = PACK(old_size - asize, 0);  // 쪼개진 블럭의 헤더/푸터 값
+
+  // set header and footer for my block
+  PUT(HEADER_PTR(bp), pack_alloc);
+  PUT(FOOTER_PTR(bp), pack_alloc);
+
+  // set header and footer for splitted block
+  void *splitted_bp = NEXT_BLOCK_PTR(bp);
+  PUT(HEADER_PTR(splitted_bp), pack_free);
+  PUT(FOOTER_PTR(splitted_bp), pack_free);
+
+  return bp;
 }
