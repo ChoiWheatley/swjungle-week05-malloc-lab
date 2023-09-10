@@ -29,7 +29,7 @@ void *mm_realloc(void *ptr, size_t size);
 static void *extend_heap(size_t words);
 static void *coalesce(byte_p bp);
 static void *find_fit(size_t asize);
-static void *place(void *bp, size_t asize);
+static void place(void *bp, size_t asize);
 
 void *g_heap_listp;
 
@@ -62,9 +62,9 @@ team_t team = {
  * Figure 9.43 코드가 누락되어 추가함.
  */
 #define WSIZE 4  //  워드 사이즈 (헤더, 푸터 사이즈) in bytes
-#define DSIZE WSIZE * 2       // 더블 워드 사이즈 in bytes
-#define CHUNKSIZE (1 << 12)   // 힙 추가 시 요청할 크기 in bytes
-#define MINIMUM_BLOCK_SIZE 9  // header, footer, payload(1)
+#define DSIZE WSIZE * 2           // 더블 워드 사이즈 in bytes
+#define CHUNKSIZE (1 << 12)       // 힙 추가 시 요청할 크기 in bytes
+#define MINIMUM_BLOCK_SIZE WSIZE  // header, footer
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 
@@ -187,7 +187,7 @@ void *mm_realloc(void *ptr, size_t size) {
 
   newptr = mm_malloc(size);
   if (newptr == NULL) return NULL;
-  copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
+  copySize = *(size_t *)((char *)oldptr - WSIZE) - 1;
   if (size < copySize) copySize = size;
   memcpy(newptr, oldptr, copySize);
   mm_free(oldptr);
@@ -278,15 +278,11 @@ void *coalesce(byte_p bp) {
  * @return asize <= BLOCK_SIZE - 2WSIZE를 만족하는 블럭 포인터 | NULL
  */
 void *find_fit(size_t asize) {
-  void *cur = g_heap_listp;
-  size_t block_size;
-
-  while ((block_size = GET_SIZE(HEADER_PTR(cur))) > 0) {
-    if (block_size < asize) {
-      cur = NEXT_BLOCK_PTR(cur);
-      continue;
+  for (void *cur = g_heap_listp; GET_SIZE(HEADER_PTR(cur)) > 0;
+       cur = NEXT_BLOCK_PTR(cur)) {
+    if (!GET_ALLOC(HEADER_PTR(cur)) && (asize <= GET_SIZE(HEADER_PTR(cur)))) {
+      return cur;
     }
-    return (void *)cur;
   }
 
   return NULL;
@@ -299,29 +295,28 @@ void *find_fit(size_t asize) {
  * 주소값이다. 우리가 할 건 bp에 헤더와 푸터를 달고 쪼개진 free block에 헤더와
  * 푸터를 다는 것이다.
  */
-void *place(void *bp, size_t asize) {
+void place(void *bp, size_t asize) {
   size_t old_size = GET_SIZE(HEADER_PTR(bp));
   size_t free_size = old_size - asize;
   dword_t pack_alloc = PACK(asize, 1);  // 새로이 할당한 블럭의 헤더/푸터 값
   dword_t pack_free = PACK(free_size, 0);  // 쪼개진 블럭의 헤더/푸터 값
 
-  PUT(HEADER_PTR(bp), pack_alloc);
   // set header and footer for splitted block
   // minimum block size <= asize
   if (MINIMUM_BLOCK_SIZE <= free_size) {
+    // set header and footer for my block
+    PUT(HEADER_PTR(bp), pack_alloc);
+    PUT(FOOTER_PTR(bp), pack_alloc);
+    // set header and footer for free block
     byte_p splitted_bp = NEXT_BLOCK_PTR(bp);
     PUT(HEADER_PTR(splitted_bp), pack_free);
     PUT(FOOTER_PTR(splitted_bp), pack_free);
   } else {
     // intentional internal fragmentation with padding bytes
-    asize = old_size;
-    pack_alloc = PACK(asize, 1);
+    dword_t pack_all = PACK(old_size, 1);
+    PUT(HEADER_PTR(bp), pack_all);
+    PUT(FOOTER_PTR(bp), pack_all);
   }
-
-  // set header and footer for my block
-  PUT(FOOTER_PTR(bp), pack_alloc);
-
-  return bp;
 }
 
 dword_t __offset(void *p) {
