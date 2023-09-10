@@ -30,6 +30,9 @@ static void *extend_heap(size_t words);
 static void *coalesce(byte_p bp);
 static void *find_fit(size_t asize);
 static void place(void *bp, size_t asize);
+inline static size_t adjust_size(size_t size);
+inline static bool is_prologue(void *bp);
+inline static bool is_epilogue(void *bp);
 
 void *g_heap_listp;
 
@@ -142,13 +145,7 @@ void *mm_malloc(size_t size) {
   }
 
   // adjust block size to include overhead and alignment requirements
-  if (size <= DSIZE) {
-    asize = 2 * DSIZE;  // for header and footer
-  } else {
-    // size + header + footer + padding 포함한 DSIZE 기준으로 정렬된 블럭의 크기
-    // (bytes)
-    asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
-  }
+  asize = adjust_size(size);
 
   // search the free list for a fit
   if ((bp = find_fit(asize)) != NULL) {
@@ -176,8 +173,8 @@ void mm_free(void *ptr) {
   coalesce(ptr);
 }
 
-/*
- * @brief
+/**
+ * @brief minimize unnecessary allocation
  */
 void *mm_realloc(void *bp, size_t size) {
   void *oldptr = bp;
@@ -187,13 +184,14 @@ void *mm_realloc(void *bp, size_t size) {
   void *next_bp = NEXT_BLOCK_PTR(bp);
   size_t my_size = GET_SIZE(HEADER_PTR(bp));
   size_t next_size = GET_SIZE(HEADER_PTR(next_bp));
-  if (!GET_ALLOC(HEADER_PTR(next_bp)) && size <= my_size + next_size - DSIZE) {
+  size_t asize = adjust_size(size);
+  if (!GET_ALLOC(HEADER_PTR(next_bp)) && asize <= my_size + next_size - DSIZE) {
     // no need to call malloc
-    dword_t packed = PACK(size, 1);
+    dword_t packed = PACK(asize, 1);
     PUT(HEADER_PTR(bp), packed);
     PUT(FOOTER_PTR(bp), packed);
     // refresh free block
-    next_size = my_size + next_size - size;
+    next_size = my_size + next_size - asize;
     next_bp = NEXT_BLOCK_PTR(bp);
     packed = PACK(next_size, 0);
     PUT(HEADER_PTR(next_bp), packed);
@@ -333,6 +331,29 @@ void place(void *bp, size_t asize) {
     PUT(HEADER_PTR(bp), pack_all);
     PUT(FOOTER_PTR(bp), pack_all);
   }
+}
+
+/**
+ * @brief size that can cover additional DWORDs, align 8-byte
+ */
+inline size_t adjust_size(size_t size) {
+  size_t asize;
+  if (size <= DSIZE) {
+    asize = 2 * DSIZE;  // for header and footer
+  } else {
+    // size + header + footer + padding 포함한 DSIZE 기준으로 정렬된 블럭의 크기
+    // (bytes)
+    asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
+  }
+  return asize;
+}
+
+inline bool is_prologue(void *bp) {
+  return GET_SIZE(HEADER_PTR(bp)) == DSIZE && GET_ALLOC(HEADER_PTR(bp));
+}
+
+inline bool is_epilogue(void *bp) {
+  return GET_SIZE(HEADER_PTR(bp)) == 0 && GET_ALLOC(HEADER_PTR(bp));
 }
 
 dword_t __offset(void *p) {
