@@ -62,9 +62,9 @@ team_t team = {
  * Figure 9.43 코드가 누락되어 추가함.
  */
 #define WSIZE 4  //  워드 사이즈 (헤더, 푸터 사이즈) in bytes
-#define DSIZE WSIZE * 2           // 더블 워드 사이즈 in bytes
-#define CHUNKSIZE (1 << 12)       // 힙 추가 시 요청할 크기 in bytes
-#define MINIMUM_BLOCK_SIZE WSIZE  // header, footer
+#define DSIZE 8  // 더블 워드 사이즈 in bytes
+#define CHUNKSIZE (1 << 12)  // 힙 추가 시 요청할 크기 in bytes
+#define MINIMUM_BLOCK_SIZE WSIZE * 2  // header, footer
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 
@@ -80,13 +80,12 @@ team_t team = {
 #define GET_ALLOC(p) (GET(p) & 0x01)
 
 // 헤더 포인터의 주소를 가리킨다. p는 payload의 첫번째 주소를 가리킨다.
-#define HEADER_PTR(bp) ((byte_p)(bp)-WSIZE)
+#define HEADER_PTR(bp) (void *)((byte_p)(bp)-WSIZE)
 // 푸터 포인터의 주소를 가리킨다. p는 payload의 첫번째 주소를 가리킨다.
 #define FOOTER_PTR(bp) ((byte_p)(bp) + GET_SIZE(HEADER_PTR(bp)) - DSIZE)
 
 // 다음 블럭의 bp(base pointer)를 가리킨다.
-#define NEXT_BLOCK_PTR(bp) \
-  (void *)((byte_p)(bp) + GET_SIZE(((byte_p)(bp)-WSIZE)))
+#define NEXT_BLOCK_PTR(bp) (void *)((byte_p)(bp) + GET_SIZE(HEADER_PTR(bp)))
 // 이전 블럭의 bp(base pointer)를 가리킨다.
 #define PREV_BLOCK_PTR(bp) (void *)((byte_p)(bp)-GET_SIZE(((byte_p)(bp)-DSIZE)))
 ///!SECTION
