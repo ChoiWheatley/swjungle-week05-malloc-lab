@@ -177,12 +177,29 @@ void mm_free(void *ptr) {
 }
 
 /*
- * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
+ * @brief
  */
-void *mm_realloc(void *ptr, size_t size) {
-  void *oldptr = ptr;
+void *mm_realloc(void *bp, size_t size) {
+  void *oldptr = bp;
   void *newptr;
   size_t copySize;
+
+  void *next_bp = NEXT_BLOCK_PTR(bp);
+  size_t my_size = GET_SIZE(HEADER_PTR(bp));
+  size_t next_size = GET_SIZE(HEADER_PTR(next_bp));
+  if (!GET_ALLOC(HEADER_PTR(next_bp)) && size <= my_size + next_size - DSIZE) {
+    // no need to call malloc
+    dword_t packed = PACK(size, 1);
+    PUT(HEADER_PTR(bp), packed);
+    PUT(FOOTER_PTR(bp), packed);
+    // refresh free block
+    next_size = my_size + next_size - size;
+    next_bp = NEXT_BLOCK_PTR(bp);
+    packed = PACK(next_size, 0);
+    PUT(HEADER_PTR(next_bp), packed);
+    PUT(FOOTER_PTR(next_bp), packed);
+    return bp;
+  }
 
   newptr = mm_malloc(size);
   if (newptr == NULL) return NULL;
