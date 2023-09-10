@@ -50,3 +50,17 @@ To get a list of the driver flags:
 
 	unix> mdriver -h
 
+
+## Performance Improvement
+
+### Implicit Free List
+
+```
+Perf index = 44 (util) + 21 (thru) = 66/100
+```
+
+### Smart Realloc
+
+```
+Perf index = 46 (util) + 25 (thru) = 71/10
+```
