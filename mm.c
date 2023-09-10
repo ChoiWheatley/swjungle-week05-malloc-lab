@@ -61,9 +61,11 @@ team_t team = {
  * Figure 9.43 코드가 누락되어 추가함.
  */
 #define WSIZE 4  //  워드 사이즈 (헤더, 푸터 사이즈) in bytes
-#define DSIZE WSIZE * 2      // 더블 워드 사이즈 in bytes
-#define CHUNKSIZE (1 << 12)  // 힙 추가 시 요청할 크기 in bytes
-#define MAX(x, y) ((x) > (y))
+#define DSIZE WSIZE * 2       // 더블 워드 사이즈 in bytes
+#define CHUNKSIZE (1 << 12)   // 힙 추가 시 요청할 크기 in bytes
+#define MINIMUM_BLOCK_SIZE 9  // header, footer, payload(1)
+
+#define MAX(x, y) ((x) > (y) ? (x) : (y))
 
 // header, footer에 들어갈 정보 (blocksize, allocated)를 묶는다.
 #define PACK(size, alloc) ((size) | (alloc))
@@ -77,9 +79,9 @@ team_t team = {
 #define GET_ALLOC(p) (GET(p) & 0x01)
 
 // 헤더 포인터의 주소를 가리킨다. p는 payload의 첫번째 주소를 가리킨다.
-#define HEADER_PTR(bp) (void *)((byte_p)(bp)-WSIZE)
+#define HEADER_PTR(bp) ((byte_p)(bp)-WSIZE)
 // 푸터 포인터의 주소를 가리킨다. p는 payload의 첫번째 주소를 가리킨다.
-#define FOOTER_PTR(bp) (void *)((byte_p)(bp) + GET_SIZE(HEADER_PTR(bp)) - DSIZE)
+#define FOOTER_PTR(bp) ((byte_p)(bp) + GET_SIZE(HEADER_PTR(bp)) - DSIZE)
 
 // 다음 블럭의 bp(base pointer)를 가리킨다.
 #define NEXT_BLOCK_PTR(bp) \
@@ -133,6 +135,7 @@ void *mm_malloc(size_t size) {
     asize = 2 * DSIZE;  // for header and footer
   } else {
     // size + header + footer + padding 포함한 DSIZE 기준으로 정렬된 블럭의 크기
+    // (bytes)
     asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
   }
 
@@ -268,8 +271,8 @@ void *find_fit(size_t asize) {
   void *cur = g_heap_listp;
   size_t block_size;
 
-  while ((block_size = GET_SIZE(cur)) > 0) {
-    if (block_size - 2 * WSIZE < asize) {
+  while ((block_size = GET_SIZE(HEADER_PTR(cur))) > 0) {
+    if (block_size < asize) {
       cur = NEXT_BLOCK_PTR(cur);
       continue;
     }
@@ -288,17 +291,25 @@ void *find_fit(size_t asize) {
  */
 void *place(void *bp, size_t asize) {
   size_t old_size = GET_SIZE(HEADER_PTR(bp));
+  size_t free_size = old_size - asize;
   dword_t pack_alloc = PACK(asize, 1);  // 새로이 할당한 블럭의 헤더/푸터 값
-  dword_t pack_free = PACK(old_size - asize, 0);  // 쪼개진 블럭의 헤더/푸터 값
+  dword_t pack_free = PACK(free_size, 0);  // 쪼개진 블럭의 헤더/푸터 값
+
+  PUT(HEADER_PTR(bp), pack_alloc);
+  // set header and footer for splitted block
+  // minimum block size <= asize
+  if (MINIMUM_BLOCK_SIZE <= free_size) {
+    byte_p splitted_bp = NEXT_BLOCK_PTR(bp);
+    PUT(HEADER_PTR(splitted_bp), pack_free);
+    PUT(FOOTER_PTR(splitted_bp), pack_free);
+  } else {
+    // intentional internal fragmentation with padding bytes
+    asize = old_size;
+    pack_alloc = PACK(asize, 1);
+  }
 
   // set header and footer for my block
-  PUT(HEADER_PTR(bp), pack_alloc);
   PUT(FOOTER_PTR(bp), pack_alloc);
-
-  // set header and footer for splitted block
-  void *splitted_bp = NEXT_BLOCK_PTR(bp);
-  PUT(HEADER_PTR(splitted_bp), pack_free);
-  PUT(FOOTER_PTR(splitted_bp), pack_free);
 
   return bp;
 }
