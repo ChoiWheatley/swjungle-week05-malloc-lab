@@ -12,6 +12,7 @@
 #include "mm.h"
 
 #include <assert.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -90,13 +91,24 @@ team_t team = {
 #define PREV_BLOCK_PTR(bp) (void *)((byte_p)(bp)-GET_SIZE(((byte_p)(bp)-DSIZE)))
 ///!SECTION
 
+/**
+ * Helper Functions
+ */
+static dword_t __offset(void *p);
+static size_t __get_size(void *p) { return GET_SIZE(p); }
+static bool __get_alloc(void *p) { return GET_ALLOC(p); }
+static byte_p __header_ptr(void *bp) { return HEADER_PTR(bp); }
+static byte_p __footer_ptr(void *bp) { return FOOTER_PTR(bp); }
+static void *__next_block_ptr(void *bp) { return NEXT_BLOCK_PTR(bp); }
+static void *__prev_block_ptr(void *bp) { return PREV_BLOCK_PTR(bp); }
+
 /*
  * # mm_init - initialize the malloc package.
  *
  * Figure 9.42에 따르면, 힙 시작 첫번째 워드는 정렬을 위해 사용하지 않으며,
  * 0으로 초기화 되어있다. 바로 뒤에는 프롤로그 블록이 나오며, 페이로드 없이
- * 헤더와 푸터만 존재한다. 힙 영역 마지막 워드는 에필로그 블록으로, 블록사이즈가
- * 0으로 초기화 되어있다.
+ * 헤더와 푸터만 존재한다. 힙 영역 마지막 워드는 에필로그 블록으로,
+ * 블록사이즈가 0으로 초기화 되어있다.
  */
 int mm_init(void) {
   // 비어있는 힙 생성
@@ -206,10 +218,9 @@ void *extend_heap(size_t words) {
 }
 
 /**
- * # coalesce - prev, next 블럭과 병합을 시도한다.
+ * coalesce - prev, next 블럭과 병합을 시도한다.
  *
  * cases:
- *
  * - none is freed
  * - prev is freed
  * - next is freed
@@ -221,24 +232,11 @@ void *coalesce(byte_p bp) {
   byte_p prev_bp = PREV_BLOCK_PTR(bp);
   byte_p next_bp = NEXT_BLOCK_PTR(bp);
 
-  if (GET_ALLOC(prev_bp) && GET_ALLOC(next_bp)) {
+  if (GET_ALLOC(HEADER_PTR(prev_bp)) && GET_ALLOC(HEADER_PTR(next_bp))) {
     // none is freed, do nothing?
     return bp;
   }
-
-  if (GET_ALLOC(prev_bp)) {
-    // next is freed, 내 헤더와 next의 푸터의 값을 바꾼다.
-    size_t extended_blocksize =
-        GET_SIZE(HEADER_PTR(bp)) + GET_SIZE(HEADER_PTR(next_bp));
-    dword_t packed = PACK(extended_blocksize, 0);
-
-    PUT(HEADER_PTR(bp), packed);
-    PUT(FOOTER_PTR(next_bp), packed);
-
-    return bp;
-  }
-
-  if (GET_ALLOC(next_bp)) {
+  if (!GET_ALLOC(HEADER_PTR(prev_bp)) && GET_ALLOC(HEADER_PTR(next_bp))) {
     // prev is freed, prev의 헤더와 내 푸터의 값을 바꾼다.
     size_t extended_blocksize =
         GET_SIZE(HEADER_PTR(bp)) + GET_SIZE(HEADER_PTR(prev_bp));
@@ -248,6 +246,18 @@ void *coalesce(byte_p bp) {
     PUT(FOOTER_PTR(bp), packed);
 
     return prev_bp;
+  }
+
+  if (!GET_ALLOC(HEADER_PTR(next_bp)) && GET_ALLOC(HEADER_PTR(prev_bp))) {
+    // next is freed, 내 헤더와 next의 푸터의 값을 바꾼다.
+    size_t extended_blocksize =
+        GET_SIZE(HEADER_PTR(bp)) + GET_SIZE(HEADER_PTR(next_bp));
+    dword_t packed = PACK(extended_blocksize, 0);
+
+    PUT(HEADER_PTR(bp), packed);
+    PUT(FOOTER_PTR(next_bp), packed);
+
+    return bp;
   }
 
   // prev, next is freed, prev의 헤더와 next의 푸터의 값을 바꾼다.
@@ -312,4 +322,8 @@ void *place(void *bp, size_t asize) {
   PUT(FOOTER_PTR(bp), pack_alloc);
 
   return bp;
+}
+
+dword_t __offset(void *p) {
+  return (dword_t)((byte_p)p - (byte_p)g_heap_listp);
 }
