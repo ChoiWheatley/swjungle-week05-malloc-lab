@@ -185,7 +185,8 @@ void *mm_realloc(void *bp, size_t size) {
   size_t my_size = GET_SIZE(HEADER_PTR(bp));
   size_t next_size = GET_SIZE(HEADER_PTR(next_bp));
   size_t asize = adjust_size(size);
-  if (!GET_ALLOC(HEADER_PTR(next_bp)) && asize <= my_size + next_size - DSIZE) {
+  if (!GET_ALLOC(HEADER_PTR(next_bp)) &&
+      asize <= my_size + next_size - MINIMUM_BLOCK_SIZE) {
     // no need to call malloc
     dword_t packed = PACK(asize, 1);
     PUT(HEADER_PTR(bp), packed);
