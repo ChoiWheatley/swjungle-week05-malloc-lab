@@ -33,8 +33,11 @@ static void place(void *bp, size_t asize);
 inline static size_t adjust_size(size_t size);
 inline static bool is_prologue(void *bp);
 inline static bool is_epilogue(void *bp);
+void *first_fit(size_t asize);
+void *next_fit(size_t asize);
 
 void *g_heap_listp;
+void *g_cur;
 
 /*********************************************************
  * NOTE TO STUDENTS: Before you do anything else, please
@@ -130,6 +133,8 @@ int mm_init(void) {
   PUT(g_heap_listp + (2 * WSIZE), PACK(DSIZE, 1));  // prologue footer
   PUT(g_heap_listp + (3 * WSIZE), PACK(0, 1));      // epilogue header
   g_heap_listp += (2 * WSIZE);
+
+  g_cur = g_heap_listp;
 
   // Extend the empty heap with a free block of CHUNKSIZE bytes
   if (extend_heap(CHUNKSIZE / WSIZE) == NULL) {
@@ -268,6 +273,7 @@ void *coalesce(byte_p bp) {
     PUT(HEADER_PTR(prev_bp), packed);
     PUT(FOOTER_PTR(bp), packed);
 
+    g_cur = prev_bp;
     return prev_bp;
   }
 
@@ -280,6 +286,7 @@ void *coalesce(byte_p bp) {
     PUT(HEADER_PTR(bp), packed);
     PUT(FOOTER_PTR(next_bp), packed);
 
+    g_cur = bp;
     return bp;
   }
 
@@ -292,6 +299,7 @@ void *coalesce(byte_p bp) {
   PUT(HEADER_PTR(prev_bp), packed);
   PUT(FOOTER_PTR(next_bp), packed);
 
+  g_cur = prev_bp;
   return prev_bp;
 }
 
@@ -300,7 +308,9 @@ void *coalesce(byte_p bp) {
  *
  * @return asize <= BLOCK_SIZE - 2WSIZE를 만족하는 블럭 포인터 | NULL
  */
-void *find_fit(size_t asize) {
+void *find_fit(size_t asize) { return next_fit(asize); }
+
+void *first_fit(size_t asize) {
   for (void *cur = g_heap_listp; GET_SIZE(HEADER_PTR(cur)) > 0;
        cur = NEXT_BLOCK_PTR(cur)) {
     if (!GET_ALLOC(HEADER_PTR(cur)) && (asize <= GET_SIZE(HEADER_PTR(cur)))) {
@@ -308,6 +318,28 @@ void *find_fit(size_t asize) {
     }
   }
 
+  return NULL;
+}
+
+void *next_fit(size_t asize) {
+  // g_cur -> epilogue
+  for (void *cur = g_cur; GET_SIZE(HEADER_PTR(cur)) > 0;
+       cur = NEXT_BLOCK_PTR(cur)) {
+    void *p = HEADER_PTR(cur);
+    if (!GET_ALLOC(p) && asize <= GET_SIZE(p)) {
+      g_cur = cur;
+      return cur;
+    }
+  }
+
+  // prologue -> g_cur
+  for (void *cur = g_heap_listp; cur < g_cur; cur = NEXT_BLOCK_PTR(cur)) {
+    void *p = HEADER_PTR(cur);
+    if (!GET_ALLOC(p) && asize <= GET_SIZE(p)) {
+      g_cur = cur;
+      return cur;
+    }
+  }
   return NULL;
 }
 
@@ -340,6 +372,8 @@ void place(void *bp, size_t asize) {
     PUT(HEADER_PTR(bp), pack_all);
     PUT(FOOTER_PTR(bp), pack_all);
   }
+
+  g_cur = bp;
 }
 
 /**
