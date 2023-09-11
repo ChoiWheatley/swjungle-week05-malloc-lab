@@ -138,7 +138,7 @@ static void __putaddr(void *p, void *addr) { PUTADDR(p, addr); }
  */
 int mm_init(void) {
   // 비어있는 힙 생성
-  if (((g_prologue) = mem_sbrk(MIN_BLK_SIZE)) == (void *)-1) {
+  if (((g_prologue) = mem_sbrk(2 * MIN_BLK_SIZE)) == (void *)-1) {
     return -1;
   }
   PUT(g_prologue + (0 * WSIZE), 0);                      // alignment padding
@@ -150,7 +150,9 @@ int mm_init(void) {
   PUT(g_prologue + (6 * WSIZE), PACK(MIN_BLK_SIZE, 1));  // prologue footer
   PUT(g_prologue + (7 * WSIZE), PACK(0, 1));             // epilogue header
 
-  g_prologue += (3 * WSIZE);  // go to prologue header
+  g_prologue += (4 * WSIZE);  // go to prologue header
+  g_cur = g_prologue;
+  g_top = g_prologue;
 
   // Extend the empty heap with a free block of CHUNKSIZE bytes
   if (extend_heap(CHUNKSIZE / WSIZE) == NULL) {
@@ -348,7 +350,7 @@ void *coalesce(byte_p bp) {
  *
  * @return asize <= BLOCK_SIZE - 2WSIZE를 만족하는 블럭 포인터 | NULL
  */
-void *find_fit(size_t asize) { return next_fit(asize); }
+void *find_fit(size_t asize) { return first_fit(asize); }
 
 void *first_fit(size_t asize) {
   for (void *cur = g_prologue; GET_SIZE(HEADER_PTR(cur)) > 0;
@@ -393,8 +395,10 @@ void *next_fit(size_t asize) {
 void place(void *bp, size_t asize) {
   size_t old_size = GET_SIZE(HEADER_PTR(bp));
   size_t free_size = old_size - asize;
-  dword_t pack_alloc = PACK(asize, 1);  // 새로이 할당한 블럭의 헤더/푸터 값
-  dword_t pack_free = PACK(free_size, 0);  // 쪼개진 블럭의 헤더/푸터 값
+  size_t pack_alloc = PACK(asize, 1);  // 새로이 할당한 블럭의 헤더/푸터 값
+  size_t pack_free = PACK(free_size, 0);  // 쪼개진 블럭의 헤더/푸터 값
+
+  pop(bp);
 
   // set header and footer for splitted block
   // minimum block size <= asize
@@ -408,7 +412,7 @@ void place(void *bp, size_t asize) {
     PUT(FOOTER_PTR(splitted_bp), pack_free);
   } else {
     // intentional internal fragmentation with padding bytes
-    dword_t pack_all = PACK(old_size, 1);
+    size_t pack_all = PACK(old_size, 1);
     PUT(HEADER_PTR(bp), pack_all);
     PUT(FOOTER_PTR(bp), pack_all);
   }
