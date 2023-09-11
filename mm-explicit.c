@@ -10,6 +10,7 @@
  * comment that gives a high level description of your solution.
  */
 #include <assert.h>
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,7 +21,6 @@
 #include "mm.h"
 
 typedef char *byte_p;
-typedef unsigned long dword_t;
 
 int mm_init(void);
 void *mm_malloc(size_t size);
@@ -30,13 +30,14 @@ static void *coalesce(byte_p bp);
 static void *find_fit(size_t asize);
 static void place(void *bp, size_t asize);
 inline static size_t adjust_size(size_t size);
-inline static bool is_prologue(void *bp);
-inline static bool is_epilogue(void *bp);
 void *first_fit(size_t asize);
 void *next_fit(size_t asize);
+void insert_first(void *elem);
+void *pop(void *elem);
 
-void *g_heap_listp;
+void *g_prologue;  // 이중연결리스트의 마지막 노드를 의미
 void *g_cur;
+void *g_top;
 
 /*********************************************************
  * NOTE TO STUDENTS: Before you do anything else, please
@@ -55,7 +56,7 @@ team_t team = {
     ""};
 
 /* single word (4) or double word (8) alignment */
-#define ALIGNMENT 8
+#define ALIGNMENT 16
 
 /* rounds up to the nearest multiple of ALIGNMENT */
 #define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~0x7)
@@ -68,8 +69,8 @@ team_t team = {
  */
 #define WSIZE 4  //  워드 사이즈 (헤더, 푸터 사이즈) in bytes
 #define DSIZE 8  // 더블 워드 사이즈 in bytes
-#define CHUNKSIZE (1 << 12)  // 힙 추가 시 요청할 크기 in bytes
-#define MINIMUM_BLOCK_SIZE WSIZE * 2  // header, footer
+#define CHUNKSIZE (1 << 12)     // 힙 추가 시 요청할 크기 in bytes
+#define MIN_BLK_SIZE WSIZE * 4  // header, footer
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 
@@ -79,6 +80,8 @@ team_t team = {
 // read and write a word at address p
 #define GET(p) (*(size_t *)(p))
 #define PUT(p, val) (*(size_t *)(p) = (val))
+#define GETADDR(p) (*(byte_p *)(p))
+#define PUTADDR(p, addr) (*(byte_p *)(p) = (byte_p)(addr))
 
 // Unpack and Read specific field from address p
 #define GET_SIZE(p) (size_t)(GET(p) & ~0x7)
@@ -93,39 +96,60 @@ team_t team = {
 #define NEXT_BLOCK_PTR(bp) (void *)((byte_p)(bp) + GET_SIZE(HEADER_PTR(bp)))
 // 이전 블럭의 bp(base pointer)를 가리킨다.
 #define PREV_BLOCK_PTR(bp) (void *)((byte_p)(bp)-GET_SIZE(((byte_p)(bp)-DSIZE)))
+
 ///!SECTION
 
 /**
  * Helper Functions
  */
-static dword_t __offset(void *p);
+static size_t __offset(void *p);
+inline static bool __is_prologue(void *bp);
+inline static bool __is_epilogue(void *bp);
 static size_t __get_size(void *p) { return GET_SIZE(p); }
 static bool __get_alloc(void *p) { return GET_ALLOC(p); }
 static byte_p __header_ptr(void *bp) { return HEADER_PTR(bp); }
 static byte_p __footer_ptr(void *bp) { return FOOTER_PTR(bp); }
 static void *__next_block_ptr(void *bp) { return NEXT_BLOCK_PTR(bp); }
 static void *__prev_block_ptr(void *bp) { return PREV_BLOCK_PTR(bp); }
+static void *__prev_free_ptr(void *bp) { return bp; }
+static void *__next_free_ptr(void *bp) {
+  return (void *)((byte_p *)bp + WSIZE);
+}
+static void *__getaddr(void *p) { return GETADDR(p); }
+static void __putaddr(void *p, void *addr) { PUTADDR(p, addr); }
 
 /*
  * # mm_init - initialize the malloc package.
  *
- * Figure 9.42에 따르면, 힙 시작 첫번째 워드는 정렬을 위해 사용하지 않으며,
- * 0으로 초기화 되어있다. 바로 뒤에는 프롤로그 블록이 나오며, 페이로드 없이
- * 헤더와 푸터만 존재한다. 힙 영역 마지막 워드는 에필로그 블록으로,
- * 블록사이즈가 0으로 초기화 되어있다.
+ * alignment를 16으로, WSIZE를 4로 주었기 때문에 정렬을 위해 첫 3워드는
+ * 패딩바이트로, 그 뒤부터 각각 header, prev, next, footer, header 순으로
+ * 들어온다.
+ *
+ * pipe(|): alignment
+ *
+ * |                          |                               |
+ * +-----+-----+-----+--------+------+------+--------+--------+
+ * | pad | pad | pad | header | prev | next | footer | header |
+ * +-----+-----+-----+--------+------+------+--------+--------+
+ * |                          ^                               ^
+ *                         prologue                           |
+ *                                                         epilogue
  */
 int mm_init(void) {
   // 비어있는 힙 생성
-  if (((g_heap_listp) = mem_sbrk(4 * WSIZE)) == (void *)-1) {
+  if (((g_prologue) = mem_sbrk(MIN_BLK_SIZE)) == (void *)-1) {
     return -1;
   }
-  PUT(g_heap_listp, 0);                             // alignment padding
-  PUT(g_heap_listp + (1 * WSIZE), PACK(DSIZE, 1));  // prologue header
-  PUT(g_heap_listp + (2 * WSIZE), PACK(DSIZE, 1));  // prologue footer
-  PUT(g_heap_listp + (3 * WSIZE), PACK(0, 1));      // epilogue header
-  g_heap_listp += (2 * WSIZE);
+  PUT(g_prologue + (0 * WSIZE), 0);                      // alignment padding
+  PUT(g_prologue + (1 * WSIZE), 0);                      // alignment padding
+  PUT(g_prologue + (2 * WSIZE), 0);                      // alignment padding
+  PUT(g_prologue + (3 * WSIZE), PACK(MIN_BLK_SIZE, 1));  // prologue header
+  PUT(g_prologue + (4 * WSIZE), (size_t)g_top);          // previous pointer
+  PUT(g_prologue + (5 * WSIZE), (size_t)NULL);           // next pointer
+  PUT(g_prologue + (6 * WSIZE), PACK(MIN_BLK_SIZE, 1));  // prologue footer
+  PUT(g_prologue + (7 * WSIZE), PACK(0, 1));             // epilogue header
 
-  g_cur = g_heap_listp;
+  g_prologue += (3 * WSIZE);  // go to prologue header
 
   // Extend the empty heap with a free block of CHUNKSIZE bytes
   if (extend_heap(CHUNKSIZE / WSIZE) == NULL) {
@@ -190,9 +214,9 @@ void *mm_realloc(void *bp, size_t size) {
   size_t next_size = GET_SIZE(HEADER_PTR(next_bp));
   size_t asize = adjust_size(size);
   if (!GET_ALLOC(HEADER_PTR(next_bp)) &&
-      asize <= my_size + next_size - MINIMUM_BLOCK_SIZE) {
+      asize <= my_size + next_size - MIN_BLK_SIZE) {
     // no need to call malloc
-    dword_t packed = PACK(asize, 1);
+    size_t packed = PACK(asize, 1);
     PUT(HEADER_PTR(bp), packed);
     PUT(FOOTER_PTR(bp), packed);
     // refresh free block
@@ -215,15 +239,17 @@ void *mm_realloc(void *bp, size_t size) {
 
 /**
  * # extend_heap - 지정한 블록 개수만큼 힙 영역을 추가한다.
+ *
  */
 void *extend_heap(size_t words) {
-  byte_p bp;
+  void *bp;
   size_t size = words * WSIZE;
 
   // 정렬을 유지하기 위해 words를 2의 배수로 반올림한다.
   if (words % 2 != 0) {
     size = (words + 1) * WSIZE;
   }
+  // sbrk는 이전 힙 영역의 마지막 위치를 리턴한다.
   if ((long)(bp = mem_sbrk(size)) == -1) {
     return NULL;
   }
@@ -231,6 +257,9 @@ void *extend_heap(size_t words) {
   PUT(HEADER_PTR(bp), PACK(size, 0));               // free block header
   PUT(FOOTER_PTR(bp), PACK(size, 0));               // free block footer
   PUT(HEADER_PTR(NEXT_BLOCK_PTR(bp)), PACK(0, 1));  // new epilogue header
+
+  // add to linked list
+  insert_first(bp);
 
   // 기존 블럭이 해제되었더라면 병합해주어야지
   return coalesce(bp);
@@ -272,7 +301,7 @@ void *coalesce(byte_p bp) {
     // next is freed, 내 헤더와 next의 푸터의 값을 바꾼다.
     size_t extended_blocksize =
         GET_SIZE(HEADER_PTR(bp)) + GET_SIZE(HEADER_PTR(next_bp));
-    dword_t packed = PACK(extended_blocksize, 0);
+    size_t packed = PACK(extended_blocksize, 0);
 
     PUT(HEADER_PTR(bp), packed);
     PUT(FOOTER_PTR(next_bp), packed);
@@ -302,7 +331,7 @@ void *coalesce(byte_p bp) {
 void *find_fit(size_t asize) { return next_fit(asize); }
 
 void *first_fit(size_t asize) {
-  for (void *cur = g_heap_listp; GET_SIZE(HEADER_PTR(cur)) > 0;
+  for (void *cur = g_prologue; GET_SIZE(HEADER_PTR(cur)) > 0;
        cur = NEXT_BLOCK_PTR(cur)) {
     if (!GET_ALLOC(HEADER_PTR(cur)) && (asize <= GET_SIZE(HEADER_PTR(cur)))) {
       return cur;
@@ -324,7 +353,7 @@ void *next_fit(size_t asize) {
   }
 
   // prologue -> g_cur
-  for (void *cur = g_heap_listp; cur < g_cur; cur = NEXT_BLOCK_PTR(cur)) {
+  for (void *cur = g_prologue; cur < g_cur; cur = NEXT_BLOCK_PTR(cur)) {
     void *p = HEADER_PTR(cur);
     if (!GET_ALLOC(p) && asize <= GET_SIZE(p)) {
       g_cur = cur;
@@ -349,7 +378,7 @@ void place(void *bp, size_t asize) {
 
   // set header and footer for splitted block
   // minimum block size <= asize
-  if (MINIMUM_BLOCK_SIZE <= free_size) {
+  if (MIN_BLK_SIZE <= free_size) {
     // set header and footer for my block
     PUT(HEADER_PTR(bp), pack_alloc);
     PUT(FOOTER_PTR(bp), pack_alloc);
@@ -382,14 +411,32 @@ inline size_t adjust_size(size_t size) {
   return asize;
 }
 
-inline bool is_prologue(void *bp) {
+inline bool __is_prologue(void *bp) {
   return GET_SIZE(HEADER_PTR(bp)) == DSIZE && GET_ALLOC(HEADER_PTR(bp));
 }
 
-inline bool is_epilogue(void *bp) {
+inline bool __is_epilogue(void *bp) {
   return GET_SIZE(HEADER_PTR(bp)) == 0 && GET_ALLOC(HEADER_PTR(bp));
 }
 
-dword_t __offset(void *p) {
-  return (dword_t)((byte_p)p - (byte_p)g_heap_listp);
+size_t __offset(void *p) { return (size_t)((byte_p)p - (byte_p)g_prologue); }
+
+/**
+ * @brief top과 top의 next 사이에 elem을 추가한다.
+ */
+void insert_first(void *bp) {
+  PUTADDR(__next_free_ptr(bp), g_top);
+  PUTADDR(__prev_free_ptr(g_top), bp);
+  PUTADDR(g_top, bp);
+}
+
+/**
+ * @brief g_top 위치를 변경하고 리턴할 원소와의 연결을 끊는다.
+ */
+void *pop(void *elem) {
+  void *ret = g_top;
+  PUTADDR(__prev_free_ptr(GETADDR(__next_free_ptr(g_top))), NULL);
+  PUTADDR(__next_free_ptr(g_top), NULL);
+  g_top = GETADDR(__next_free_ptr(g_top));
+  return ret;
 }
