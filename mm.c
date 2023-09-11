@@ -67,7 +67,7 @@ team_t team = {
 #define WSIZE 4  //  워드 사이즈 (헤더, 푸터 사이즈) in bytes
 #define DSIZE 8  // 더블 워드 사이즈 in bytes
 #define CHUNKSIZE (1 << 12)  // 힙 추가 시 요청할 크기 in bytes
-#define MINIMUM_BLOCK_SIZE WSIZE * 2  // header, footer
+#define MINIMUM_BLOCK_SIZE WSIZE * 4  // header, footer, prev, next
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 
@@ -91,7 +91,8 @@ team_t team = {
 #define NEXT_BLOCK_PTR(bp) (void *)((byte_p)(bp) + GET_SIZE(HEADER_PTR(bp)))
 // 이전 블럭의 bp(base pointer)를 가리킨다.
 #define PREV_BLOCK_PTR(bp) (void *)((byte_p)(bp)-GET_SIZE(((byte_p)(bp)-DSIZE)))
-///!SECTION
+
+///!SECTION Constants and Macros
 
 /**
  * Helper Functions
@@ -103,6 +104,13 @@ static byte_p __header_ptr(void *bp) { return HEADER_PTR(bp); }
 static byte_p __footer_ptr(void *bp) { return FOOTER_PTR(bp); }
 static void *__next_block_ptr(void *bp) { return NEXT_BLOCK_PTR(bp); }
 static void *__prev_block_ptr(void *bp) { return PREV_BLOCK_PTR(bp); }
+/**
+ * Explicit Free List
+ */
+inline static void *__prev(void *bp) { return (void *)GET(bp); }
+inline static void *__next(void *bp) { return (void *)GET(bp + WSIZE); }
+inline static void *__next_free_ptr(void *bp) {}
+inline static void *__prev_free_ptr(void *bp) {}
 
 /*
  * # mm_init - initialize the malloc package.
