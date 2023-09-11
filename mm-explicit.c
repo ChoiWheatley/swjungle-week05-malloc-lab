@@ -32,8 +32,9 @@ static void place(void *bp, size_t asize);
 inline static size_t adjust_size(size_t size);
 void *first_fit(size_t asize);
 void *next_fit(size_t asize);
-void insert_first(void *elem);
-void *pop(void *elem);
+void insert_front(void *elem);
+void *pop_front(void *elem);
+void pop(void *elem);
 
 void *g_prologue;  // 이중연결리스트의 마지막 노드를 의미
 void *g_cur;
@@ -259,7 +260,7 @@ void *extend_heap(size_t words) {
   PUT(HEADER_PTR(NEXT_BLOCK_PTR(bp)), PACK(0, 1));  // new epilogue header
 
   // add to linked list
-  insert_first(bp);
+  insert_front(bp);
 
   // 기존 블럭이 해제되었더라면 병합해주어야지
   return coalesce(bp);
@@ -284,15 +285,23 @@ void *coalesce(byte_p bp) {
     // none is freed, do nothing?
     return bp;
   }
+
+  // ∵ bp will be merged and be re-pushed into the list soon!
+  pop(bp);
+
   if (!GET_ALLOC(HEADER_PTR(prev_bp)) && GET_ALLOC(HEADER_PTR(next_bp))) {
     // prev is freed, prev의 헤더와 내 푸터의 값을 바꾼다.
     size_t extended_blocksize =
         GET_SIZE(HEADER_PTR(bp)) + GET_SIZE(HEADER_PTR(prev_bp));
     size_t packed = PACK(extended_blocksize, 0);
 
+    pop(prev_bp);
+
+    // make prev_bp the bigger chunk
     PUT(HEADER_PTR(prev_bp), packed);
     PUT(FOOTER_PTR(bp), packed);
 
+    insert_front(prev_bp);
     g_cur = prev_bp;
     return prev_bp;
   }
@@ -303,8 +312,13 @@ void *coalesce(byte_p bp) {
         GET_SIZE(HEADER_PTR(bp)) + GET_SIZE(HEADER_PTR(next_bp));
     size_t packed = PACK(extended_blocksize, 0);
 
+    pop(next_bp);
+
+    // make bp the bigger chunk
     PUT(HEADER_PTR(bp), packed);
     PUT(FOOTER_PTR(next_bp), packed);
+
+    insert_front(bp);
 
     g_cur = bp;
     return bp;
@@ -316,8 +330,14 @@ void *coalesce(byte_p bp) {
                               GET_SIZE(HEADER_PTR(next_bp));
   size_t packed = PACK(extended_blocksize, 0);
 
+  pop(prev_bp);
+  pop(next_bp);
+
+  // make prev_bp the bigger chunk
   PUT(HEADER_PTR(prev_bp), packed);
   PUT(FOOTER_PTR(next_bp), packed);
+
+  insert_front(prev_bp);
 
   g_cur = prev_bp;
   return prev_bp;
@@ -424,7 +444,7 @@ size_t __offset(void *p) { return (size_t)((byte_p)p - (byte_p)g_prologue); }
 /**
  * @brief top과 top의 next 사이에 elem을 추가한다.
  */
-void insert_first(void *bp) {
+void insert_front(void *bp) {
   PUTADDR(__next_free_ptr(bp), g_top);
   PUTADDR(__prev_free_ptr(g_top), bp);
   PUTADDR(g_top, bp);
@@ -433,10 +453,24 @@ void insert_first(void *bp) {
 /**
  * @brief g_top 위치를 변경하고 리턴할 원소와의 연결을 끊는다.
  */
-void *pop(void *elem) {
+void *pop_front(void *elem) {
   void *ret = g_top;
   PUTADDR(__prev_free_ptr(GETADDR(__next_free_ptr(g_top))), NULL);
   PUTADDR(__next_free_ptr(g_top), NULL);
   g_top = GETADDR(__next_free_ptr(g_top));
   return ret;
+}
+
+/**
+ * @brief elem을 리스트에서 꺼낸다. 앞, 뒤 적절하게 연결한다.
+ */
+void pop(void *elem) {
+  void *prev = __prev_free_ptr(__getaddr(elem));
+  void *next = __next_free_ptr(__getaddr(elem));
+  if (prev != NULL) {
+    __putaddr(__next_free_ptr(prev), next);
+  }
+  if (next != NULL) {
+    __putaddr(__next_free_ptr(next), prev);
+  }
 }
