@@ -34,7 +34,6 @@ inline static bool is_prologue(void *bp);
 inline static bool is_epilogue(void *bp);
 void *first_fit(size_t asize);
 void *next_fit(size_t asize);
-void *exp_first_fit(size_t asize);
 
 void *g_heap_listp;
 void *g_cur;
@@ -70,7 +69,7 @@ team_t team = {
 #define WSIZE 4  //  워드 사이즈 (헤더, 푸터 사이즈) in bytes
 #define DSIZE 8  // 더블 워드 사이즈 in bytes
 #define CHUNKSIZE (1 << 12)  // 힙 추가 시 요청할 크기 in bytes
-#define MINIMUM_BLOCK_SIZE WSIZE * 4  // header, footer, prev, next
+#define MINIMUM_BLOCK_SIZE WSIZE * 2  // header, footer
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 
@@ -94,8 +93,7 @@ team_t team = {
 #define NEXT_BLOCK_PTR(bp) (void *)((byte_p)(bp) + GET_SIZE(HEADER_PTR(bp)))
 // 이전 블럭의 bp(base pointer)를 가리킨다.
 #define PREV_BLOCK_PTR(bp) (void *)((byte_p)(bp)-GET_SIZE(((byte_p)(bp)-DSIZE)))
-
-///!SECTION Constants and Macros
+///!SECTION
 
 /**
  * Helper Functions
@@ -103,17 +101,10 @@ team_t team = {
 static dword_t __offset(void *p);
 static size_t __get_size(void *p) { return GET_SIZE(p); }
 static bool __get_alloc(void *p) { return GET_ALLOC(p); }
-static void *__header_ptr(void *bp) { return HEADER_PTR(bp); }
-static void *__footer_ptr(void *bp) { return FOOTER_PTR(bp); }
+static byte_p __header_ptr(void *bp) { return HEADER_PTR(bp); }
+static byte_p __footer_ptr(void *bp) { return FOOTER_PTR(bp); }
 static void *__next_block_ptr(void *bp) { return NEXT_BLOCK_PTR(bp); }
 static void *__prev_block_ptr(void *bp) { return PREV_BLOCK_PTR(bp); }
-/**
- * Explicit Free List
- */
-inline static void *__prev(void *bp) { return (void *)GET(bp); }
-inline static void *__next(void *bp) { return (void *)GET(bp + WSIZE); }
-inline static void *__next_free_ptr(void *bp) {}
-inline static void *__prev_free_ptr(void *bp) {}
 
 /*
  * # mm_init - initialize the malloc package.
@@ -334,21 +325,6 @@ void *next_fit(size_t asize) {
 
   // prologue -> g_cur
   for (void *cur = g_heap_listp; cur < g_cur; cur = NEXT_BLOCK_PTR(cur)) {
-    void *p = HEADER_PTR(cur);
-    if (!GET_ALLOC(p) && asize <= GET_SIZE(p)) {
-      g_cur = cur;
-      return cur;
-    }
-  }
-  return NULL;
-}
-
-/**
- * @brief explicit free list 기법 & first fit 정책
- */
-void *exp_first_fit(size_t asize) {
-  for (void *cur = g_heap_listp; __get_size(__header_ptr(cur)) > 0;
-       cur = __next_free_ptr(cur)) {
     void *p = HEADER_PTR(cur);
     if (!GET_ALLOC(p) && asize <= GET_SIZE(p)) {
       g_cur = cur;
