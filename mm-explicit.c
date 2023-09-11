@@ -22,6 +22,11 @@
 
 typedef char *byte_p;
 
+typedef struct free_t {
+  void *prev;
+  void *next;
+} free_t;
+
 int mm_init(void);
 void *mm_malloc(size_t size);
 void *mm_realloc(void *ptr, size_t size);
@@ -33,7 +38,7 @@ inline static size_t adjust_size(size_t size);
 void *first_fit(size_t asize);
 void *next_fit(size_t asize);
 void insert_front(void *elem);
-void *pop_front(void *elem);
+void *pop_front();
 void pop(void *elem);
 
 void *g_prologue;  // 이중연결리스트의 마지막 노드를 의미
@@ -118,6 +123,12 @@ static void *__next_free_ptr(void *bp) {
 }
 static void *__getaddr(void *p) { return GETADDR(p); }
 static void __putaddr(void *p, void *addr) { PUTADDR(p, addr); }
+/// @brief 단순 getaddr & prev_free_ptr 합성함수
+static void *__getprev(void *bp) { return __getaddr(__prev_free_ptr(bp)); }
+/// @brief 단순 getaddr & next_free_ptr 합성함수
+static void *__getnext(void *bp) { return __getaddr(__next_free_ptr(bp)); }
+/// @brief cast from free block pointer to `free_t`
+static free_t __as_free_t(void *bp) {}
 
 /*
  * # mm_init - initialize the malloc package.
@@ -410,6 +421,8 @@ void place(void *bp, size_t asize) {
     byte_p splitted_bp = NEXT_BLOCK_PTR(bp);
     PUT(HEADER_PTR(splitted_bp), pack_free);
     PUT(FOOTER_PTR(splitted_bp), pack_free);
+
+    insert_front(splitted_bp);
   } else {
     // intentional internal fragmentation with padding bytes
     size_t pack_all = PACK(old_size, 1);
@@ -451,17 +464,19 @@ size_t __offset(void *p) { return (size_t)((byte_p)p - (byte_p)g_prologue); }
 void insert_front(void *bp) {
   PUTADDR(__next_free_ptr(bp), g_top);
   PUTADDR(__prev_free_ptr(g_top), bp);
-  PUTADDR(g_top, bp);
+  g_top = bp;
 }
 
 /**
  * @brief g_top 위치를 변경하고 리턴할 원소와의 연결을 끊는다.
  */
-void *pop_front(void *elem) {
+void *pop_front() {
+  if (g_top == g_prologue) {
+    // empty
+    return NULL;
+  }
   void *ret = g_top;
-  PUTADDR(__prev_free_ptr(GETADDR(__next_free_ptr(g_top))), NULL);
-  PUTADDR(__next_free_ptr(g_top), NULL);
-  g_top = GETADDR(__next_free_ptr(g_top));
+  g_top = __getnext(g_top);
   return ret;
 }
 
@@ -469,12 +484,25 @@ void *pop_front(void *elem) {
  * @brief elem을 리스트에서 꺼낸다. 앞, 뒤 적절하게 연결한다.
  */
 void pop(void *elem) {
-  void *prev = __prev_free_ptr(__getaddr(elem));
-  void *next = __next_free_ptr(__getaddr(elem));
+  if (elem == NULL) {
+    return;
+  }
+  if (elem == g_top) {
+    pop_front();
+    return;
+  }
+  void *prev = __getprev(elem);
+  void *next = __getnext(elem);
   if (prev != NULL) {
-    __putaddr(__next_free_ptr(prev), next);
+    __putaddr(__next_free_ptr(prev), next);  // prev.next = next
+    if (next != NULL) {
+      __putaddr(__prev_free_ptr(next), prev);  // next.prev = prev
+    }
   }
   if (next != NULL) {
-    __putaddr(__next_free_ptr(next), prev);
+    __putaddr(__prev_free_ptr(next), prev);  // next.prev = prev
+    if (prev != NULL) {
+      __putaddr(__next_free_ptr(prev), next);  // prev.next = next
+    }
   }
 }
