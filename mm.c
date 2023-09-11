@@ -278,6 +278,7 @@ void *coalesce(byte_p bp) {
     PUT(HEADER_PTR(bp), packed);
     PUT(FOOTER_PTR(next_bp), packed);
 
+    g_cur = bp;
     return bp;
   }
 
