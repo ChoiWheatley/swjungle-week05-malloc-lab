@@ -20,13 +20,11 @@
 #include "memlib.h"
 #include "mm.h"
 
-typedef char *byte_p;
-
 int mm_init(void);
 void *mm_malloc(size_t size);
 void *mm_realloc(void *ptr, size_t size);
 static void *extend_heap(size_t words);
-static void *coalesce(byte_p bp);
+static void *coalesce(void *bp);
 static void *find_fit(size_t asize);
 static void place(void *bp, size_t asize);
 inline static size_t adjust_size(size_t size);
@@ -68,10 +66,10 @@ team_t team = {
  * SECTION Constants and Macros
  * Figure 9.43 코드가 누락되어 추가함.
  */
-#define WSIZE 4  //  워드 사이즈 (헤더, 푸터 사이즈) in bytes
-#define DSIZE 8  // 더블 워드 사이즈 in bytes
+#define WSIZE sizeof(void *)  //  워드 사이즈 (헤더, 푸터 사이즈) in bytes
+#define DSIZE (2 * WSIZE)       // 더블 워드 사이즈 in bytes
 #define CHUNKSIZE (1 << 12)     // 힙 추가 시 요청할 크기 in bytes
-#define MIN_BLK_SIZE WSIZE * 4  // header, footer
+#define MIN_BLK_SIZE WSIZE * 4  // header, footer, prev, next
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 
@@ -81,22 +79,23 @@ team_t team = {
 // read and write a word at address p
 #define GET(p) (*(size_t *)(p))
 #define PUT(p, val) (*(size_t *)(p) = (val))
-#define GETADDR(p) (*(byte_p *)(p))
-#define PUTADDR(p, addr) (*(byte_p *)(p) = (byte_p)(addr))
+#define GETADDR(p) ((void *)*(uintptr_t *)(p))
+#define PUTADDR(p, addr) (*(uintptr_t *)(p) = (uintptr_t)(addr))
 
 // Unpack and Read specific field from address p
 #define GET_SIZE(p) (size_t)(GET(p) & ~0x7)
 #define GET_ALLOC(p) (GET(p) & 0x01)
 
 // 헤더 포인터의 주소를 가리킨다. p는 payload의 첫번째 주소를 가리킨다.
-#define HEADER_PTR(bp) (void *)((byte_p)(bp)-WSIZE)
+#define HEADER_PTR(bp) (void *)((uintptr_t)(bp)-WSIZE)
 // 푸터 포인터의 주소를 가리킨다. p는 payload의 첫번째 주소를 가리킨다.
-#define FOOTER_PTR(bp) ((byte_p)(bp) + GET_SIZE(HEADER_PTR(bp)) - DSIZE)
+#define FOOTER_PTR(bp) ((void *)(bp) + GET_SIZE(HEADER_PTR(bp)) - DSIZE)
 
 // 다음 블럭의 bp(base pointer)를 가리킨다.
-#define NEXT_BLOCK_PTR(bp) (void *)((byte_p)(bp) + GET_SIZE(HEADER_PTR(bp)))
+#define NEXT_BLOCK_PTR(bp) (void *)((uintptr_t)(bp) + GET_SIZE(HEADER_PTR(bp)))
 // 이전 블럭의 bp(base pointer)를 가리킨다.
-#define PREV_BLOCK_PTR(bp) (void *)((byte_p)(bp)-GET_SIZE(((byte_p)(bp)-DSIZE)))
+#define PREV_BLOCK_PTR(bp) \
+  (void *)((uintptr_t)(bp)-GET_SIZE(((uintptr_t)(bp)-DSIZE)))
 
 ///!SECTION
 
@@ -108,8 +107,8 @@ inline static bool __is_prologue(void *bp);
 inline static bool __is_epilogue(void *bp);
 static size_t __get_size(void *p) { return GET_SIZE(p); }
 static bool __get_alloc(void *p) { return GET_ALLOC(p); }
-static byte_p __header_ptr(void *bp) { return HEADER_PTR(bp); }
-static byte_p __footer_ptr(void *bp) { return FOOTER_PTR(bp); }
+static void *__header_ptr(void *bp) { return HEADER_PTR(bp); }
+static void *__footer_ptr(void *bp) { return FOOTER_PTR(bp); }
 static void *__next_block_ptr(void *bp) { return NEXT_BLOCK_PTR(bp); }
 static void *__prev_block_ptr(void *bp) { return PREV_BLOCK_PTR(bp); }
 static void *__prev_free_ptr(void *bp) {
@@ -122,7 +121,7 @@ static void *__next_free_ptr(void *bp) {
 #ifdef DEBUG
   assert(bp == g_prologue || !GET_ALLOC(HEADER_PTR(bp)));
 #endif  // DEBUG
-  return (void *)((byte_p *)bp + WSIZE);
+  return (void *)((uintptr_t *)bp + WSIZE);
 }
 
 static void *__getaddr(void *p) { return GETADDR(p); }
@@ -234,7 +233,7 @@ int mm_init(void) {
 void *mm_malloc(size_t size) {
   size_t asize;       // adjusted block size
   size_t extendsize;  // amount to extend heap if no fit
-  byte_p bp;
+  void *bp;
 
   // ignore spurious requests
   if (size == 0) {
@@ -351,9 +350,9 @@ void *extend_heap(size_t words) {
  *
  * @return coalesced block pointer
  */
-void *coalesce(byte_p bp) {
-  byte_p prev_bp = PREV_BLOCK_PTR(bp);
-  byte_p next_bp = NEXT_BLOCK_PTR(bp);
+void *coalesce(void *bp) {
+  void *prev_bp = PREV_BLOCK_PTR(bp);
+  void *next_bp = NEXT_BLOCK_PTR(bp);
 
   if (GET_ALLOC(HEADER_PTR(prev_bp)) && GET_ALLOC(HEADER_PTR(next_bp))) {
     // none is freed
@@ -479,7 +478,7 @@ void place(void *bp, size_t asize) {
     PUT(HEADER_PTR(bp), pack_alloc);
     PUT(FOOTER_PTR(bp), pack_alloc);
     // set header and footer for free block
-    byte_p splitted_bp = NEXT_BLOCK_PTR(bp);
+    void *splitted_bp = NEXT_BLOCK_PTR(bp);
     PUT(HEADER_PTR(splitted_bp), pack_free);
     PUT(FOOTER_PTR(splitted_bp), pack_free);
 
@@ -525,7 +524,9 @@ void __enumerate(void *head, void (*callback)(void *bp, size_t idx)) {
   }
 }
 
-size_t __offset(void *p) { return (size_t)((byte_p)p - (byte_p)g_prologue); }
+size_t __offset(void *p) {
+  return (size_t)((uintptr_t)p - (uintptr_t)g_prologue);
+}
 
 /**
  * @brief top과 top의 next 사이에 elem을 추가한다.
