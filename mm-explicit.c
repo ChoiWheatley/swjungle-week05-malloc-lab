@@ -112,8 +112,16 @@ static byte_p __header_ptr(void *bp) { return HEADER_PTR(bp); }
 static byte_p __footer_ptr(void *bp) { return FOOTER_PTR(bp); }
 static void *__next_block_ptr(void *bp) { return NEXT_BLOCK_PTR(bp); }
 static void *__prev_block_ptr(void *bp) { return PREV_BLOCK_PTR(bp); }
-static void *__prev_free_ptr(void *bp) { return bp; }
+static void *__prev_free_ptr(void *bp) {
+#ifdef DEBUG
+  assert(!GET_ALLOC(HEADER_PTR(bp)));
+#endif  // DEBUG
+  return bp;
+}
 static void *__next_free_ptr(void *bp) {
+#ifdef DEBUG
+  assert(!GET_ALLOC(HEADER_PTR(bp)));
+#endif  // DEBUG
   return (void *)((byte_p *)bp + WSIZE);
 }
 
@@ -154,7 +162,7 @@ static bool __alloc(void *bp) { return __header_alloc(bp); }
  */
 static void __enumerate(void *head, void (*callback)(void *bp, size_t idx));
 
-#define DEBUG
+/// debug for visualise list of free blocks!!!
 #ifdef DEBUG
 void const *g_buf[CHUNKSIZE];     // buffer for linked list objects
 size_t buf_offsets[CHUNKSIZE];    // buffer for offsets lying on linked list
@@ -168,9 +176,9 @@ void cb_free_block(void *node, size_t idx) {
 
 const void **linked_list_to_buffer() {
   // init buffer
-  memset(g_buf, 0, CHUNKSIZE);
-  memset(buf_offsets, 0, CHUNKSIZE);
-  memset(buf_freesizes, 0, CHUNKSIZE);
+  memset(g_buf, 0, CHUNKSIZE * sizeof(void *));
+  memset(buf_offsets, 0, CHUNKSIZE * sizeof(size_t));
+  memset(buf_freesizes, 0, CHUNKSIZE * sizeof(size_t));
   // call enumerate
   __enumerate(g_top, cb_free_block);
   return g_buf;
@@ -323,7 +331,7 @@ void *extend_heap(size_t words) {
   PUT(HEADER_PTR(NEXT_BLOCK_PTR(bp)), PACK(0, 1));  // new epilogue header
 
   // add to linked list
-  // insert_front(bp);
+  insert_front(bp);
 
   // 기존 블럭이 해제되었더라면 병합해주어야지
   return coalesce(bp);
