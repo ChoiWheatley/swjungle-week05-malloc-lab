@@ -22,11 +22,6 @@
 
 typedef char *byte_p;
 
-typedef struct free_t {
-  void *prev;
-  void *next;
-} free_t;
-
 int mm_init(void);
 void *mm_malloc(size_t size);
 void *mm_realloc(void *ptr, size_t size);
@@ -121,22 +116,66 @@ static void *__prev_free_ptr(void *bp) { return bp; }
 static void *__next_free_ptr(void *bp) {
   return (void *)((byte_p *)bp + WSIZE);
 }
+
 static void *__getaddr(void *p) { return GETADDR(p); }
+
 static void __putaddr(void *p, void *addr) { PUTADDR(p, addr); }
+
 /// @brief 단순 getaddr & prev_free_ptr 합성함수
 static void *__getprev(void *bp) { return __getaddr(__prev_free_ptr(bp)); }
+
 /// @brief 단순 getaddr & next_free_ptr 합성함수
 static void *__getnext(void *bp) { return __getaddr(__next_free_ptr(bp)); }
-/// @brief cast from free block pointer to `free_t`
-static free_t __as_free_t(void *bp) {}
+
 /// @brief simple get_size & header_ptr composite function
 static size_t __header_size(void *bp) { return __get_size(__header_ptr(bp)); }
+
 /// @brief simple get_alloc & header_ptr composite function
 static bool __header_alloc(void *bp) { return __get_alloc(__header_ptr(bp)); }
+
 /// @brief simple get_size & footer_ptr composite function
 static size_t __footer_size(void *bp) { return __get_size(__footer_ptr(bp)); }
+
 /// @brief simple get_alloc & footer_ptr composite function
 static bool __footer_alloc(void *bp) { return __get_alloc(__footer_ptr(bp)); }
+
+/// @brief sbrk(0) always return last address of heap
+static void *__epilogue() { return mem_sbrk(0); }
+
+/// @brief simple wrapper for __get_size(__header_ptr(bp));
+static size_t __size(void *bp) { return __header_size(bp); }
+
+/// @brief simple wrapper for __get_alloc(__header_ptr(bp))
+static bool __alloc(void *bp) { return __header_alloc(bp); }
+/**
+ * @brief travel bunch of free blocks with given callback function.
+ * @param callback: free block pointer, current index
+ * @details NOTE that end of linked list is always allocated block!
+ */
+static void __enumerate(void *head, void (*callback)(void *bp, size_t idx));
+
+#define DEBUG
+#ifdef DEBUG
+void const *g_buf[CHUNKSIZE];     // buffer for linked list objects
+size_t buf_offsets[CHUNKSIZE];    // buffer for offsets lying on linked list
+size_t buf_freesizes[CHUNKSIZE];  // size of the free blocks
+
+void cb_free_block(void *node, size_t idx) {
+  g_buf[idx] = node;
+  buf_offsets[idx] = __offset(node);
+  buf_freesizes[idx] = __size(node);
+}
+
+const void **linked_list_to_buffer() {
+  // init buffer
+  memset(g_buf, 0, CHUNKSIZE);
+  memset(buf_offsets, 0, CHUNKSIZE);
+  memset(buf_freesizes, 0, CHUNKSIZE);
+  // call enumerate
+  __enumerate(g_top, cb_free_block);
+  return g_buf;
+}
+#endif  // DEBUG
 
 /*
  * # mm_init - initialize the malloc package.
@@ -465,6 +504,14 @@ inline bool __is_prologue(void *bp) {
 
 inline bool __is_epilogue(void *bp) {
   return GET_SIZE(HEADER_PTR(bp)) == 0 && GET_ALLOC(HEADER_PTR(bp));
+}
+
+void __enumerate(void *head, void (*callback)(void *bp, size_t idx)) {
+  size_t idx = 0;
+  for (void *cur = head; !__alloc(cur); cur = __getaddr(__next_free_ptr(cur))) {
+    callback(cur, idx);
+    idx += 1;
+  }
 }
 
 size_t __offset(void *p) { return (size_t)((byte_p)p - (byte_p)g_prologue); }
