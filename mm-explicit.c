@@ -129,6 +129,14 @@ static void *__getprev(void *bp) { return __getaddr(__prev_free_ptr(bp)); }
 static void *__getnext(void *bp) { return __getaddr(__next_free_ptr(bp)); }
 /// @brief cast from free block pointer to `free_t`
 static free_t __as_free_t(void *bp) {}
+/// @brief simple get_size & header_ptr composite function
+static size_t __header_size(void *bp) { return __get_size(__header_ptr(bp)); }
+/// @brief simple get_alloc & header_ptr composite function
+static bool __header_alloc(void *bp) { return __get_alloc(__header_ptr(bp)); }
+/// @brief simple get_size & footer_ptr composite function
+static size_t __footer_size(void *bp) { return __get_size(__footer_ptr(bp)); }
+/// @brief simple get_alloc & footer_ptr composite function
+static bool __footer_alloc(void *bp) { return __get_alloc(__footer_ptr(bp)); }
 
 /*
  * # mm_init - initialize the malloc package.
@@ -156,7 +164,7 @@ int mm_init(void) {
   PUT(g_prologue + (1 * WSIZE), 0);                      // alignment padding
   PUT(g_prologue + (2 * WSIZE), 0);                      // alignment padding
   PUT(g_prologue + (3 * WSIZE), PACK(MIN_BLK_SIZE, 1));  // prologue header
-  PUT(g_prologue + (4 * WSIZE), (size_t)g_top);          // previous pointer
+  PUT(g_prologue + (4 * WSIZE), (size_t)NULL);           // previous pointer
   PUT(g_prologue + (5 * WSIZE), (size_t)NULL);           // next pointer
   PUT(g_prologue + (6 * WSIZE), PACK(MIN_BLK_SIZE, 1));  // prologue footer
   PUT(g_prologue + (7 * WSIZE), PACK(0, 1));             // epilogue header
@@ -212,6 +220,9 @@ void mm_free(void *ptr) {
 
   PUT(HEADER_PTR(ptr), PACK(size, 0));
   PUT(FOOTER_PTR(ptr), PACK(size, 0));
+
+  insert_front(ptr);  // register into list newly-freed block
+
   coalesce(ptr);
 }
 
@@ -280,7 +291,7 @@ void *extend_heap(size_t words) {
 }
 
 /**
- * coalesce - prev, next 블럭과 병합을 시도한다.
+ * coalesce - empty bp block & prev, next 블럭과 병합을 시도한다.
  *
  * cases:
  * - none is freed
@@ -295,14 +306,14 @@ void *coalesce(byte_p bp) {
   byte_p next_bp = NEXT_BLOCK_PTR(bp);
 
   if (GET_ALLOC(HEADER_PTR(prev_bp)) && GET_ALLOC(HEADER_PTR(next_bp))) {
-    // none is freed, do nothing?
+    // none is freed
     return bp;
   }
 
   // ∵ bp will be merged and be re-pushed into the list soon!
   pop(bp);
 
-  if (!GET_ALLOC(HEADER_PTR(prev_bp)) && GET_ALLOC(HEADER_PTR(next_bp))) {
+  if (!__header_alloc(prev_bp) && __header_alloc(next_bp)) {
     // prev is freed, prev의 헤더와 내 푸터의 값을 바꾼다.
     size_t extended_blocksize =
         GET_SIZE(HEADER_PTR(bp)) + GET_SIZE(HEADER_PTR(prev_bp));
