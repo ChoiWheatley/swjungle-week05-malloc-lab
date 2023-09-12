@@ -260,7 +260,7 @@ void mm_free(void *ptr) {
   PUT(HEADER_PTR(ptr), PACK(size, 0));
   PUT(FOOTER_PTR(ptr), PACK(size, 0));
 
-  insert_front(ptr);  // register into list newly-freed block
+  // insert_front(ptr);  // register into list newly-freed block
 
   coalesce(ptr);
 }
@@ -323,7 +323,7 @@ void *extend_heap(size_t words) {
   PUT(HEADER_PTR(NEXT_BLOCK_PTR(bp)), PACK(0, 1));  // new epilogue header
 
   // add to linked list
-  insert_front(bp);
+  // insert_front(bp);
 
   // 기존 블럭이 해제되었더라면 병합해주어야지
   return coalesce(bp);
@@ -350,7 +350,7 @@ void *coalesce(byte_p bp) {
   }
 
   // ∵ bp will be merged and be re-pushed into the list soon!
-  pop(bp);
+  // pop(bp);
 
   if (!__header_alloc(prev_bp) && __header_alloc(next_bp)) {
     // prev is freed, prev의 헤더와 내 푸터의 값을 바꾼다.
@@ -358,13 +358,13 @@ void *coalesce(byte_p bp) {
         GET_SIZE(HEADER_PTR(bp)) + GET_SIZE(HEADER_PTR(prev_bp));
     size_t packed = PACK(extended_blocksize, 0);
 
-    pop(prev_bp);
+    // pop(prev_bp);
 
     // make prev_bp the bigger chunk
     PUT(HEADER_PTR(prev_bp), packed);
     PUT(FOOTER_PTR(bp), packed);
 
-    insert_front(prev_bp);
+    // insert_front(prev_bp);
     g_cur = prev_bp;
     return prev_bp;
   }
@@ -375,13 +375,13 @@ void *coalesce(byte_p bp) {
         GET_SIZE(HEADER_PTR(bp)) + GET_SIZE(HEADER_PTR(next_bp));
     size_t packed = PACK(extended_blocksize, 0);
 
-    pop(next_bp);
+    // pop(next_bp);
 
     // make bp the bigger chunk
     PUT(HEADER_PTR(bp), packed);
     PUT(FOOTER_PTR(next_bp), packed);
 
-    insert_front(bp);
+    // insert_front(bp);
 
     g_cur = bp;
     return bp;
@@ -393,14 +393,14 @@ void *coalesce(byte_p bp) {
                               GET_SIZE(HEADER_PTR(next_bp));
   size_t packed = PACK(extended_blocksize, 0);
 
-  pop(prev_bp);
-  pop(next_bp);
+  // pop(prev_bp);
+  // pop(next_bp);
 
   // make prev_bp the bigger chunk
   PUT(HEADER_PTR(prev_bp), packed);
   PUT(FOOTER_PTR(next_bp), packed);
 
-  insert_front(prev_bp);
+  // insert_front(prev_bp);
 
   g_cur = prev_bp;
   return prev_bp;
@@ -459,7 +459,7 @@ void place(void *bp, size_t asize) {
   size_t pack_alloc = PACK(asize, 1);  // 새로이 할당한 블럭의 헤더/푸터 값
   size_t pack_free = PACK(free_size, 0);  // 쪼개진 블럭의 헤더/푸터 값
 
-  pop(bp);
+  // pop(bp);
 
   // set header and footer for splitted block
   // minimum block size <= asize
@@ -472,7 +472,7 @@ void place(void *bp, size_t asize) {
     PUT(HEADER_PTR(splitted_bp), pack_free);
     PUT(FOOTER_PTR(splitted_bp), pack_free);
 
-    insert_front(splitted_bp);
+    // insert_front(splitted_bp);
   } else {
     // intentional internal fragmentation with padding bytes
     size_t pack_all = PACK(old_size, 1);
