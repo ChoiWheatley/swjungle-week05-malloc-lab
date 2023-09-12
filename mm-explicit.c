@@ -109,32 +109,22 @@ static void *__header_ptr(void *bp) { return HEADER_PTR(bp); }
 static void *__footer_ptr(void *bp) { return FOOTER_PTR(bp); }
 static void *__next_block_ptr(void *bp) { return NEXT_BLOCK_PTR(bp); }
 static void *__prev_block_ptr(void *bp) { return PREV_BLOCK_PTR(bp); }
-static void *__prev_free_ptr(void *bp) {
-#ifdef DEBUG
-  assert(bp == g_prologue || !GET_ALLOC(HEADER_PTR(bp)));
-#endif  // DEBUG
-  return bp;
-}
+static void *__prev_free_ptr(void *bp) { return bp; }
 static void *__next_free_ptr(void *bp) {
-#ifdef DEBUG
-  assert(bp == g_prologue || !GET_ALLOC(HEADER_PTR(bp)));
-#endif  // DEBUG
   return (void *)((uintptr_t *)bp + WSIZE);
 }
 
 static void *__getaddr(void *p) { return GETADDR(p); }
 
 /// @brief set next field in free block
-static void __set_next_ptr(void *p, void *addr) { PUTADDR(p, (uintptr_t)addr); }
+static void __set_next_ptr(void *p, void *addr) {
+  PUTADDR(__next_free_ptr(p), addr);
+}
 
 /// @brief set previous field in free block
-static void __set_prev_ptr(void *p, void *addr) { PUTADDR(p, (uintptr_t)addr); }
-
-/// @brief 단순 getaddr & prev_free_ptr 합성함수
-static void *__prev(void *bp) { return __getaddr(__prev_free_ptr(bp)); }
-
-/// @brief 단순 getaddr & next_free_ptr 합성함수
-static void *__next(void *bp) { return __getaddr(__next_free_ptr(bp)); }
+static void __set_prev_ptr(void *p, void *addr) {
+  PUTADDR(__prev_free_ptr(p), addr);
+}
 
 /// @brief simple get_size & header_ptr composite function
 static size_t __header_size(void *bp) { return GET_SIZE(HEADER_PTR(bp)); }
@@ -162,6 +152,24 @@ static bool __alloc(void *bp) { return __header_alloc(bp); }
  * @details NOTE that end of linked list is always allocated block!
  */
 static void __enumerate(void *head, void (*callback)(void *bp, size_t idx));
+
+/// @brief 단순 getaddr & prev_free_ptr 합성함수
+/// @return bp.prev | NULL if bp is allocated or literally has NULL prev
+static void *__prev(void *bp) {
+  if (__alloc(bp)) {
+    return NULL;
+  }
+  return __getaddr(__prev_free_ptr(bp));
+}
+
+/// @brief 단순 getaddr & next_free_ptr 합성함수
+/// @return bp.next | NULL if bp is allocated or literally has NULL next
+static void *__next(void *bp) {
+  if (__alloc(bp)) {
+    return NULL;
+  }
+  return __getaddr(__next_free_ptr(bp));
+}
 
 /// debug for visualise list of free blocks!!!
 #ifdef DEBUG
@@ -325,6 +333,11 @@ void *extend_heap(size_t words) {
   if (words % 2 != 0) {
     size = (words + 1) * WSIZE;
   }
+
+  if (size < MIN_BLK_SIZE) {
+    size = MIN_BLK_SIZE;
+  }
+
   // sbrk는 이전 힙 영역의 마지막 위치를 리턴한다.
   if ((long)(bp = mem_sbrk(size)) == -1) {
     return NULL;
@@ -334,17 +347,15 @@ void *extend_heap(size_t words) {
   PUT(FOOTER_PTR(bp), PACK(size, 0));               // free block footer
   PUT(HEADER_PTR(NEXT_BLOCK_PTR(bp)), PACK(0, 1));  // new epilogue header
 
-  // add to linked list
-  insert_front(bp);
-
   // 기존 블럭이 해제되었더라면 병합해주어야지
   return coalesce(bp);
 }
 
 /**
- * coalesce - empty bp block & prev, next 블럭과 병합을 시도한다.
+ * @brief empty bp block & prev, next 블럭과 병합을 시도한다. bp is considered
+ * as newly created free block, which cannot be popped!
  *
- * cases:
+ * @cases:
  * - none is freed
  * - prev is freed
  * - next is freed
@@ -353,69 +364,33 @@ void *extend_heap(size_t words) {
  * @return coalesced block pointer
  */
 void *coalesce(void *bp) {
-  void *prev_bp = PREV_BLOCK_PTR(bp);
-  void *next_bp = NEXT_BLOCK_PTR(bp);
+  void *prev = __prev_block_ptr(bp);
+  void *next = __next_block_ptr(bp);
+  size_t size = __size(bp);
 
-  if (GET_ALLOC(HEADER_PTR(prev_bp)) && GET_ALLOC(HEADER_PTR(next_bp))) {
-    // none is freed
-    return bp;
+  if (__alloc(prev) && !__alloc(next)) {
+    // next block is only free
+    size += __size(next);
+    pop(next);
+  } else if (!__alloc(prev) && __alloc(next)) {
+    // prev block is only free
+    size += __size(prev);
+    bp = prev;
+    pop(bp);
+  } else if (!__alloc(prev) && !__alloc(next)) {
+    // both blocks are free!
+    size += __size(prev) + __size(next);
+    pop(prev);
+    pop(next);
+    bp = prev;
   }
 
-  // ∵ bp will be merged and be re-pushed into the list soon!
-  pop(bp);
+  // lastly set bp header&footer and insert bp into free list
+  PUT(HEADER_PTR(bp), PACK(size, 0));
+  PUT(FOOTER_PTR(bp), PACK(size, 0));
 
-  if (!__header_alloc(prev_bp) && __header_alloc(next_bp)) {
-    // prev is freed, prev의 헤더와 내 푸터의 값을 바꾼다.
-    size_t extended_blocksize =
-        GET_SIZE(HEADER_PTR(bp)) + GET_SIZE(HEADER_PTR(prev_bp));
-    size_t packed = PACK(extended_blocksize, 0);
-
-    pop(prev_bp);
-
-    // make prev_bp the bigger chunk
-    PUT(HEADER_PTR(prev_bp), packed);
-    PUT(FOOTER_PTR(bp), packed);
-
-    insert_front(prev_bp);
-    g_cur = prev_bp;
-    return prev_bp;
-  }
-
-  if (!GET_ALLOC(HEADER_PTR(next_bp)) && GET_ALLOC(HEADER_PTR(prev_bp))) {
-    // next is freed, 내 헤더와 next의 푸터의 값을 바꾼다.
-    size_t extended_blocksize =
-        GET_SIZE(HEADER_PTR(bp)) + GET_SIZE(HEADER_PTR(next_bp));
-    size_t packed = PACK(extended_blocksize, 0);
-
-    pop(next_bp);
-
-    // make bp the bigger chunk
-    PUT(HEADER_PTR(bp), packed);
-    PUT(FOOTER_PTR(next_bp), packed);
-
-    insert_front(bp);
-
-    g_cur = bp;
-    return bp;
-  }
-
-  // prev, next is freed, prev의 헤더와 next의 푸터의 값을 바꾼다.
-  size_t extended_blocksize = GET_SIZE(HEADER_PTR(prev_bp)) +
-                              GET_SIZE(HEADER_PTR(bp)) +
-                              GET_SIZE(HEADER_PTR(next_bp));
-  size_t packed = PACK(extended_blocksize, 0);
-
-  pop(prev_bp);
-  pop(next_bp);
-
-  // make prev_bp the bigger chunk
-  PUT(HEADER_PTR(prev_bp), packed);
-  PUT(FOOTER_PTR(next_bp), packed);
-
-  insert_front(prev_bp);
-
-  g_cur = prev_bp;
-  return prev_bp;
+  insert_front(bp);
+  return bp;
 }
 
 /**
@@ -471,27 +446,29 @@ void place(void *bp, size_t asize) {
   size_t pack_alloc = PACK(asize, 1);  // 새로이 할당한 블럭의 헤더/푸터 값
   size_t pack_free = PACK(free_size, 0);  // 쪼개진 블럭의 헤더/푸터 값
 
-  pop(bp);
-
   // set header and footer for splitted block
   // minimum block size <= asize
   if (MIN_BLK_SIZE <= free_size) {
     // set header and footer for my block
     PUT(HEADER_PTR(bp), pack_alloc);
     PUT(FOOTER_PTR(bp), pack_alloc);
-    // set header and footer for free block
-    void *splitted_bp = NEXT_BLOCK_PTR(bp);
-    PUT(HEADER_PTR(splitted_bp), pack_free);
-    PUT(FOOTER_PTR(splitted_bp), pack_free);
 
-    insert_front(splitted_bp);
+    pop(bp);
+
+    // set header and footer for free block
+    bp = __next(bp);
+    PUT(HEADER_PTR(bp), pack_free);
+    PUT(FOOTER_PTR(bp), pack_free);
+
+    coalesce(bp);
   } else {
     // intentional internal fragmentation with padding bytes
     size_t pack_all = PACK(old_size, 1);
     PUT(HEADER_PTR(bp), pack_all);
     PUT(FOOTER_PTR(bp), pack_all);
-  }
 
+    pop(bp);
+  }
   g_cur = bp;
 }
 
@@ -544,9 +521,6 @@ void insert_front(void *bp) {
  * @brief elem을 리스트에서 꺼낸다. 앞, 뒤 적절하게 연결한다.
  */
 void pop(void *bp) {
-  if (bp == NULL) {
-    return;
-  }
   if (__prev(bp)) {
     __set_next_ptr(__prev(bp), __next(bp));
   } else {
