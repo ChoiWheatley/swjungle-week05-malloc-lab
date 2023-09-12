@@ -114,13 +114,13 @@ static void *__next_block_ptr(void *bp) { return NEXT_BLOCK_PTR(bp); }
 static void *__prev_block_ptr(void *bp) { return PREV_BLOCK_PTR(bp); }
 static void *__prev_free_ptr(void *bp) {
 #ifdef DEBUG
-  assert(!GET_ALLOC(HEADER_PTR(bp)));
+  assert(bp == g_prologue || !GET_ALLOC(HEADER_PTR(bp)));
 #endif  // DEBUG
   return bp;
 }
 static void *__next_free_ptr(void *bp) {
 #ifdef DEBUG
-  assert(!GET_ALLOC(HEADER_PTR(bp)));
+  assert(bp == g_prologue || !GET_ALLOC(HEADER_PTR(bp)));
 #endif  // DEBUG
   return (void *)((byte_p *)bp + WSIZE);
 }
@@ -136,16 +136,16 @@ static void *__getprev(void *bp) { return __getaddr(__prev_free_ptr(bp)); }
 static void *__getnext(void *bp) { return __getaddr(__next_free_ptr(bp)); }
 
 /// @brief simple get_size & header_ptr composite function
-static size_t __header_size(void *bp) { return __get_size(__header_ptr(bp)); }
+static size_t __header_size(void *bp) { return GET_SIZE(HEADER_PTR(bp)); }
 
 /// @brief simple get_alloc & header_ptr composite function
-static bool __header_alloc(void *bp) { return __get_alloc(__header_ptr(bp)); }
+static bool __header_alloc(void *bp) { return GET_ALLOC(HEADER_PTR(bp)); }
 
 /// @brief simple get_size & footer_ptr composite function
-static size_t __footer_size(void *bp) { return __get_size(__footer_ptr(bp)); }
+static size_t __footer_size(void *bp) { return GET_SIZE(FOOTER_PTR(bp)); }
 
 /// @brief simple get_alloc & footer_ptr composite function
-static bool __footer_alloc(void *bp) { return __get_alloc(__footer_ptr(bp)); }
+static bool __footer_alloc(void *bp) { return GET_ALLOC(FOOTER_PTR(bp)); }
 
 /// @brief sbrk(0) always return last address of heap
 static void *__epilogue() { return mem_sbrk(0); }
@@ -253,6 +253,9 @@ void *mm_malloc(size_t size) {
   // no fit found. get more memory and place the block
   extendsize = MAX(asize, CHUNKSIZE);
   if ((bp = extend_heap(extendsize / WSIZE)) == NULL) {
+#ifdef DEBUG
+    assert(!__alloc(bp));
+#endif  // DEBUG
     return NULL;
   }
   place(bp, asize);
@@ -424,7 +427,7 @@ void *find_fit(size_t asize) { return first_fit(asize); }
 void *first_fit(size_t asize) {
   for (void *cur = g_prologue; GET_SIZE(HEADER_PTR(cur)) > 0;
        cur = NEXT_BLOCK_PTR(cur)) {
-    if (!GET_ALLOC(HEADER_PTR(cur)) && (asize <= GET_SIZE(HEADER_PTR(cur)))) {
+    if (!__alloc(cur) && (asize <= __size(cur))) {
       return cur;
     }
   }
@@ -480,7 +483,7 @@ void place(void *bp, size_t asize) {
     PUT(HEADER_PTR(splitted_bp), pack_free);
     PUT(FOOTER_PTR(splitted_bp), pack_free);
 
-    // insert_front(splitted_bp);
+    insert_front(splitted_bp);
   } else {
     // intentional internal fragmentation with padding bytes
     size_t pack_all = PACK(old_size, 1);
