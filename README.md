@@ -72,3 +72,8 @@ Perf index = 46 (util) + 25 (thru) = 71/10
 Perf index = 45 (util) + 40 (thru) = 85/100
 ```
 
+### explicit free list
+
+```
+Perf index = 43 (util) + 40 (thru) = 83/100
+```
