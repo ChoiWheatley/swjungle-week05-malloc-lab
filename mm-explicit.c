@@ -107,10 +107,14 @@ static size_t __get_size(void *p) { return GET_SIZE(p); }
 static bool __get_alloc(void *p) { return GET_ALLOC(p); }
 static void *__header(void *bp) { return HEADER(bp); }
 static void *__footer(void *bp) { return FOOTER(bp); }
-static void *__next_block(void *bp) { return NEXT_ADJ(bp); }
-static void *__prev_block(void *bp) { return PREV_ADJ(bp); }
+static void *__next_adj(void *bp) { return NEXT_ADJ(bp); }
+static void *__prev_adj(void *bp) { return PREV_ADJ(bp); }
 static void *__next_free(void *bp) { return NEXT_FREE(bp); }
 static void *__prev_free(void *bp) { return PREV_FREE(bp); }
+// simple composite function that calls `__get_alloc(__header(bp))`
+static bool __alloc_bp(void *bp) { return __get_alloc(__header(bp)); }
+// simple composite function that calls `__get_size(__header(bp))`
+static size_t __size_bp(void *bp) { return __get_size(__header(bp)); }
 
 #ifdef DEBUG
 /// @brief from prologue to epilogue, print all blocks information
@@ -266,44 +270,40 @@ void *extend_heap(size_t words) {
 void *coalesce(void *bp) {
   void *prev_bp = PREV_ADJ(bp);
   void *next_bp = NEXT_ADJ(bp);
+  size_t size = __size_bp(bp);
 
-  if (GET_ALLOC(HEADER(prev_bp)) && GET_ALLOC(HEADER(next_bp))) {
-    // none is freed, do nothing?
-    return bp;
+  if (__alloc_bp(prev_bp) && !__alloc_bp(next_bp)) {
+    // next is only freed, change my header and footer
+    size += __size_bp(next_bp);
+
+    // remove_from_free_list(NEXT_FREE(bp));
+
+    PUT(HEADER(bp), PACK(size, 0));
+    PUT(FOOTER(next_bp), PACK(size, 0));
+  } else if (__alloc_bp(next_bp) && !__alloc_bp(prev_bp)) {
+    // prev is only freed, change prev's header and footer
+    size += __size_bp(prev_bp);
+    bp = prev_bp;
+
+    // remove_from_free_list(NEXT_FREE(bp));
+
+    PUT(HEADER(bp), PACK(size, 0));
+    PUT(FOOTER(bp), PACK(size, 0));
+  } else if (!__alloc_bp(prev_bp) && !__alloc_bp(next_bp)) {
+    // both are freed
+    size += __size_bp(prev_bp) + __size_bp(next_bp);
+
+    // remove_from_free_list(NEXT_FREE(prev_bp));
+    // remove_from_free_list(NEXT_FREE(next_bp));
+
+    bp = prev_bp;
+    PUT(HEADER(bp), PACK(size, 0));
+    PUT(FOOTER(bp), PACK(size, 0));
   }
-  if (!GET_ALLOC(HEADER(prev_bp)) && GET_ALLOC(HEADER(next_bp))) {
-    // prev is freed, prev의 헤더와 내 푸터의 값을 바꾼다.
-    size_t extended_blocksize =
-        GET_SIZE(HEADER(bp)) + GET_SIZE(HEADER(prev_bp));
-    size_t packed = PACK(extended_blocksize, 0);
 
-    PUT(HEADER(prev_bp), packed);
-    PUT(FOOTER(bp), packed);
+  // insert_in_free_list(bp);
 
-    return prev_bp;
-  }
-
-  if (!GET_ALLOC(HEADER(next_bp)) && GET_ALLOC(HEADER(prev_bp))) {
-    // next is freed, 내 헤더와 next의 푸터의 값을 바꾼다.
-    size_t extended_blocksize =
-        GET_SIZE(HEADER(bp)) + GET_SIZE(HEADER(next_bp));
-    dword_t packed = PACK(extended_blocksize, 0);
-
-    PUT(HEADER(bp), packed);
-    PUT(FOOTER(next_bp), packed);
-
-    return bp;
-  }
-
-  // prev, next is freed, prev의 헤더와 next의 푸터의 값을 바꾼다.
-  size_t extended_blocksize = GET_SIZE(HEADER(prev_bp)) + GET_SIZE(HEADER(bp)) +
-                              GET_SIZE(HEADER(next_bp));
-  size_t packed = PACK(extended_blocksize, 0);
-
-  PUT(HEADER(prev_bp), packed);
-  PUT(FOOTER(next_bp), packed);
-
-  return prev_bp;
+  return bp;
 }
 
 /**
