@@ -105,6 +105,13 @@ static void *__header_ptr(void *bp) { return HEADER_PTR(bp); }
 static void *__footer_ptr(void *bp) { return FOOTER_PTR(bp); }
 static void *__next_block_ptr(void *bp) { return NEXT_BLOCK_PTR(bp); }
 static void *__prev_block_ptr(void *bp) { return PREV_BLOCK_PTR(bp); }
+static void *__next_free(void *bp) { return NEXT_FREE(bp); }
+static void *__prev_free(void *bp) { return PREV_FREE(bp); }
+
+#ifdef DEBUG
+/// @brief from prologue to epilogue, print all blocks information
+static void print_heap();
+#endif  // DEBUG
 
 /*
  * # mm_init - initialize the malloc package.
