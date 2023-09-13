@@ -297,10 +297,10 @@ void *coalesce(void *bp) {
   } else if (!prev_alloc && next_alloc) {
     // prev is only freed, change prev's header and footer
     size += __size_bp(prev_bp);
+
+    remove_from_free_list(prev_bp);
+
     bp = prev_bp;
-
-    remove_from_free_list(bp);
-
     PUT(HEADER(bp), PACK(size, 0));
     PUT(FOOTER(bp), PACK(size, 0));
   } else if (!prev_alloc && !next_alloc) {
@@ -326,7 +326,7 @@ void *coalesce(void *bp) {
  *
  * @return asize <= BLOCK_SIZE - 2WSIZE를 만족하는 블럭 포인터 | NULL
  */
-void *find_fit(size_t asize) { return first_fit(asize); }
+void *find_fit(size_t asize) { return first_fit_explicit(asize); }
 
 void *first_fit(size_t asize) {
   for (void *cur = g_prologue; GET_SIZE(HEADER(cur)) > 0; cur = NEXT_ADJ(cur)) {
@@ -386,7 +386,7 @@ inline size_t adjust_size(size_t size) {
   } else {
     // size + header + footer + padding 포함한 DSIZE 기준으로 정렬된 블럭의 크기
     // size + (WSIZE) + (WSIZE) of aligned by ALIGNMENT
-    asize = DSIZE * ((size + DSIZE + (DSIZE - 1)) / DSIZE);
+    asize = ALIGN(size + WSIZE + WSIZE);
   }
   return asize;
 }
