@@ -90,9 +90,9 @@ team_t team = {
 #define FOOTER(bp) (void *)((uintptr_t)(bp) + GET_SIZE(HEADER(bp)) - DSIZE)
 
 // 다음 블럭의 bp(base pointer)를 가리킨다.
-#define NEXT_BLK(bp) (void *)((uintptr_t)(bp) + GET_SIZE(HEADER(bp)))
+#define NEXT_ADJ(bp) (void *)((uintptr_t)(bp) + GET_SIZE(HEADER(bp)))
 // 이전 블럭의 bp(base pointer)를 가리킨다.
-#define PREV_BLK(bp) (void *)((uintptr_t)(bp)-GET_SIZE(((uintptr_t)(bp)-DSIZE)))
+#define PREV_ADJ(bp) (void *)((uintptr_t)(bp)-GET_SIZE(((uintptr_t)(bp)-DSIZE)))
 
 // get next pointer in the list, NULLable
 #define NEXT_FREE(bp) (void *)(*(uintptr_t *)bp + WSIZE)
@@ -107,8 +107,8 @@ static size_t __get_size(void *p) { return GET_SIZE(p); }
 static bool __get_alloc(void *p) { return GET_ALLOC(p); }
 static void *__header(void *bp) { return HEADER(bp); }
 static void *__footer(void *bp) { return FOOTER(bp); }
-static void *__next_block(void *bp) { return NEXT_BLK(bp); }
-static void *__prev_block(void *bp) { return PREV_BLK(bp); }
+static void *__next_block(void *bp) { return NEXT_ADJ(bp); }
+static void *__prev_block(void *bp) { return PREV_ADJ(bp); }
 static void *__next_free(void *bp) { return NEXT_FREE(bp); }
 static void *__prev_free(void *bp) { return PREV_FREE(bp); }
 
@@ -194,7 +194,7 @@ void *mm_realloc(void *bp, size_t size) {
   void *newptr;
   size_t copySize;
 
-  void *next_bp = NEXT_BLK(bp);
+  void *next_bp = NEXT_ADJ(bp);
   size_t my_size = GET_SIZE(HEADER(bp));
   size_t next_size = GET_SIZE(HEADER(next_bp));
   size_t asize = adjust_size(size);
@@ -206,7 +206,7 @@ void *mm_realloc(void *bp, size_t size) {
     PUT(FOOTER(bp), packed);
     // refresh free block
     next_size = my_size + next_size - asize;
-    next_bp = NEXT_BLK(bp);
+    next_bp = NEXT_ADJ(bp);
     packed = PACK(next_size, 0);
     PUT(HEADER(next_bp), packed);
     PUT(FOOTER(next_bp), packed);
@@ -246,7 +246,7 @@ void *extend_heap(size_t words) {
   // 늘어난 힙 영역대로 헤더 푸터 에필로그 헤더를 재설정한다.
   PUT(HEADER(old_epilogue), PACK(size, 0));         // free block header
   PUT(FOOTER(old_epilogue), PACK(size, 0));         // free block footer
-  PUT(HEADER(NEXT_BLK(old_epilogue)), PACK(0, 1));  // new epilogue header
+  PUT(HEADER(NEXT_ADJ(old_epilogue)), PACK(0, 1));  // new epilogue header
 
   // 기존 블럭이 해제되었더라면 병합해주어야지
   return coalesce(old_epilogue);
@@ -264,8 +264,8 @@ void *extend_heap(size_t words) {
  * @return coalesced block pointer
  */
 void *coalesce(void *bp) {
-  void *prev_bp = PREV_BLK(bp);
-  void *next_bp = NEXT_BLK(bp);
+  void *prev_bp = PREV_ADJ(bp);
+  void *next_bp = NEXT_ADJ(bp);
 
   if (GET_ALLOC(HEADER(prev_bp)) && GET_ALLOC(HEADER(next_bp))) {
     // none is freed, do nothing?
@@ -314,7 +314,7 @@ void *coalesce(void *bp) {
 void *find_fit(size_t asize) { return first_fit(asize); }
 
 void *first_fit(size_t asize) {
-  for (void *cur = g_prologue; GET_SIZE(HEADER(cur)) > 0; cur = NEXT_BLK(cur)) {
+  for (void *cur = g_prologue; GET_SIZE(HEADER(cur)) > 0; cur = NEXT_ADJ(cur)) {
     if (!GET_ALLOC(HEADER(cur)) && (asize <= GET_SIZE(HEADER(cur)))) {
       return cur;
     }
@@ -343,7 +343,7 @@ void place(void *bp, size_t asize) {
     PUT(HEADER(bp), pack_alloc);
     PUT(FOOTER(bp), pack_alloc);
     // set header and footer for free block
-    void *splitted_bp = NEXT_BLK(bp);
+    void *splitted_bp = NEXT_ADJ(bp);
     PUT(HEADER(splitted_bp), pack_free);
     PUT(FOOTER(splitted_bp), pack_free);
   } else {
