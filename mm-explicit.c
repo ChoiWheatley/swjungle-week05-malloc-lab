@@ -24,7 +24,7 @@ typedef unsigned long dword_t;
 
 int mm_init(void);
 void *mm_malloc(size_t size);
-void *mm_realloc(void *ptr, size_t size);
+void *mm_realloc(void *bp, size_t size);
 static void *extend_heap(size_t words);
 static void *coalesce(void *bp);
 static void *find_fit(size_t asize);
@@ -83,19 +83,22 @@ team_t team = {
 #define GET_ALLOC(p) (bool)(GET(p) & 0x01)
 
 // 헤더 포인터의 주소를 가리킨다. p는 payload의 첫번째 주소를 가리킨다.
-#define HEADER(bp) (void *)((uintptr_t)(bp)-WSIZE)
+#define HEADER(bp) ((void *)(bp)-WSIZE)
 // 푸터 포인터의 주소를 가리킨다. p는 payload의 첫번째 주소를 가리킨다.
-#define FOOTER(bp) (void *)((uintptr_t)(bp) + GET_SIZE(HEADER(bp)) - DSIZE)
+#define FOOTER(bp) ((void *)(bp) + GET_SIZE(HEADER(bp)) - DSIZE)
 
 // 다음 블럭의 bp(base pointer)를 가리킨다.
-#define NEXT_ADJ(bp) (void *)((uintptr_t)(bp) + GET_SIZE(HEADER(bp)))
+#define NEXT_ADJ(bp) ((void *)(bp) + GET_SIZE(HEADER(bp)))
 // 이전 블럭의 bp(base pointer)를 가리킨다.
-#define PREV_ADJ(bp) (void *)((uintptr_t)(bp)-GET_SIZE(((uintptr_t)(bp)-DSIZE)))
+#define PREV_ADJ(bp) ((void *)(bp)-GET_SIZE(((uintptr_t)(bp)-DSIZE)))
 
 // get next pointer in the list, NULLable
-#define NEXT_FREE(bp) (*(uintptr_t **)(bp + WSIZE))
+#define NEXT_FREE(bp) (*(char **)(bp + WSIZE))
 // get prev pointer in the list, NULLable
-#define PREV_FREE(bp) (*(uintptr_t **)bp)
+#define PREV_FREE(bp) (*(char **)(bp))
+
+#define SET_NEXT_FREE(bp, qp) (NEXT_FREE(bp) = qp)
+#define SET_PREV_FREE(bp, qp) (PREV_FREE(bp) = qp)
 
 /**
  * Helper Functions
@@ -182,12 +185,14 @@ void *mm_malloc(size_t size) {
 /*
  * mm_free - Freeing a block does nothing.
  */
-void mm_free(void *ptr) {
-  size_t size = GET_SIZE(HEADER(ptr));
-
-  PUT(HEADER(ptr), PACK(size, 0));
-  PUT(FOOTER(ptr), PACK(size, 0));
-  coalesce(ptr);
+void mm_free(void *bp) {
+  if (bp == NULL) {
+    return;
+  }
+  size_t size = __size_bp(bp);
+  PUT(HEADER(bp), PACK(size, 0));
+  PUT(FOOTER(bp), PACK(size, 0));
+  coalesce(bp);
 }
 
 /**
@@ -403,21 +408,21 @@ static void *first_fit_explicit(size_t asize) {
 
 /// @brief inserts the free block pointer into the free list
 static void insert_in_free_list(void *bp) {
-  NEXT_FREE(bp) = (uintptr_t *)g_free_list_head;  // bp.next = head
-  PREV_FREE(g_free_list_head) = (uintptr_t *)bp;  // head.prev = bp
-  PREV_FREE(bp) = (uintptr_t *)NULL;              // bp.prev = NULL
+  SET_NEXT_FREE(bp, g_free_list_head);  // bp.next = head
+  SET_PREV_FREE(g_free_list_head, bp);  // head.prev = bp
+  SET_PREV_FREE(bp, NULL);              // bp.prev = NULL
   g_free_list_head = bp;
 }
 
 /// @brief removes the free block pointer from the free list
 static void remove_from_free_list(void *bp) {
-  if (__prev_free(bp)) {
+  if (PREV_FREE(bp)) {
     // bp.prev.next = bp.next
-    NEXT_FREE(__prev_free(bp)) = NEXT_FREE(bp);
+    SET_NEXT_FREE(PREV_FREE(bp), NEXT_FREE(bp));
   } else {
     // head = bp.next
-    g_free_list_head = __next_free(bp);
+    g_free_list_head = NEXT_FREE(bp);
   }
   // bp.next.prev = bp.prev
-  PREV_FREE(NEXT_FREE(bp)) = __prev_free(bp);
+  SET_PREV_FREE(NEXT_FREE(bp), PREV_FREE(bp));
 }
