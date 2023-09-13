@@ -75,12 +75,12 @@ team_t team = {
 #define PACK(size, alloc) ((size) | (alloc))
 
 // read and write a word at address p
-#define GET(p) (*(size_t *)(p))
-#define PUT(p, val) (*(size_t *)(p) = (val))
+#define GET(p) (*(uintptr_t *)(p))
+#define PUT(p, val) (*(uintptr_t *)(p) = (val))
 
 // Unpack and Read specific field from address p
-#define GET_SIZE(p) (size_t)(GET(p) & ~(ALIGNMENT - 1))
-#define GET_ALLOC(p) (bool)(GET(p) & 0x01)
+#define GET_SIZE(p) (GET(p) & ~(ALIGNMENT - 1))
+#define GET_ALLOC(p) (GET(p) & 0x01)
 
 // 헤더 포인터의 주소를 가리킨다. p는 payload의 첫번째 주소를 가리킨다.
 #define HEADER(bp) ((void *)(bp)-WSIZE)
@@ -90,7 +90,7 @@ team_t team = {
 // 다음 블럭의 bp(base pointer)를 가리킨다.
 #define NEXT_ADJ(bp) ((void *)(bp) + GET_SIZE(HEADER(bp)))
 // 이전 블럭의 bp(base pointer)를 가리킨다.
-#define PREV_ADJ(bp) ((void *)(bp)-GET_SIZE(((uintptr_t)(bp)-DSIZE)))
+#define PREV_ADJ(bp) ((void *)(bp)-GET_SIZE(((void *)(bp)-DSIZE)))
 
 // get next pointer in the list, NULLable
 #define NEXT_FREE(bp) (*(char **)(bp + WSIZE))
@@ -118,8 +118,10 @@ static bool __alloc_bp(void *bp) { return __get_alloc(__header(bp)); }
 static size_t __size_bp(void *bp) { return __get_size(__header(bp)); }
 
 #ifdef DEBUG
-/// @brief from prologue to epilogue, print all blocks information
-static void print_heap();
+/* Function prototypes for heap consistency checker routines: */
+static void checkblock(void *bp);
+static void checkheap(bool verbose);
+static void printblock(void *bp);
 #endif  // DEBUG
 
 /*
@@ -132,7 +134,7 @@ static void print_heap();
  */
 int mm_init(void) {
   // 비어있는 힙 생성
-  if (((g_prologue) = mem_sbrk(4 * WSIZE)) == (void *)-1) {
+  if (((g_prologue) = mem_sbrk(8 * WSIZE)) == (void *)-1) {
     return -1;
   }
   PUT(g_prologue + (0 * WSIZE), 0);               // alignment padding
@@ -189,7 +191,7 @@ void mm_free(void *bp) {
   if (bp == NULL) {
     return;
   }
-  size_t size = __size_bp(bp);
+  size_t size = GET_SIZE(HEADER(bp));
   PUT(HEADER(bp), PACK(size, 0));
   PUT(FOOTER(bp), PACK(size, 0));
   coalesce(bp);
@@ -202,11 +204,16 @@ void *mm_realloc(void *bp, size_t size) {
   void *oldptr = bp;
   void *newptr;
   size_t copySize;
-
   void *next_bp = NEXT_ADJ(bp);
   size_t my_size = GET_SIZE(HEADER(bp));
   size_t next_size = GET_SIZE(HEADER(next_bp));
   size_t asize = adjust_size(size);
+
+  if (size == 0) {
+    mm_free(bp);
+    return NULL;
+  }
+
   if (!GET_ALLOC(HEADER(next_bp)) &&
       asize <= my_size + next_size - MINIMUM_BLOCK_SIZE) {
     // no need to call malloc
@@ -275,33 +282,36 @@ void *extend_heap(size_t words) {
 void *coalesce(void *bp) {
   void *prev_bp = PREV_ADJ(bp);
   void *next_bp = NEXT_ADJ(bp);
+  const bool next_alloc = __alloc_bp(next_bp);
+  const bool prev_alloc = __alloc_bp(prev_bp) || prev_bp == bp;
   size_t size = __size_bp(bp);
 
-  if (__alloc_bp(prev_bp) && !__alloc_bp(next_bp)) {
+  if (prev_alloc && !next_alloc) {
     // next is only freed, change my header and footer
     size += __size_bp(next_bp);
 
-    remove_from_free_list(NEXT_FREE(bp));
+    remove_from_free_list(next_bp);
 
     PUT(HEADER(bp), PACK(size, 0));
     PUT(FOOTER(next_bp), PACK(size, 0));
-  } else if (__alloc_bp(next_bp) && !__alloc_bp(prev_bp)) {
+  } else if (!prev_alloc && next_alloc) {
     // prev is only freed, change prev's header and footer
     size += __size_bp(prev_bp);
     bp = prev_bp;
 
-    remove_from_free_list(NEXT_FREE(bp));
+    remove_from_free_list(bp);
 
     PUT(HEADER(bp), PACK(size, 0));
     PUT(FOOTER(bp), PACK(size, 0));
-  } else if (!__alloc_bp(prev_bp) && !__alloc_bp(next_bp)) {
+  } else if (!prev_alloc && !next_alloc) {
     // both are freed
     size += __size_bp(prev_bp) + __size_bp(next_bp);
 
-    remove_from_free_list(NEXT_FREE(prev_bp));
-    remove_from_free_list(NEXT_FREE(next_bp));
+    remove_from_free_list(prev_bp);
+    remove_from_free_list(next_bp);
 
     bp = prev_bp;
+
     PUT(HEADER(bp), PACK(size, 0));
     PUT(FOOTER(bp), PACK(size, 0));
   }
@@ -376,7 +386,7 @@ inline size_t adjust_size(size_t size) {
   } else {
     // size + header + footer + padding 포함한 DSIZE 기준으로 정렬된 블럭의 크기
     // size + (WSIZE) + (WSIZE) of aligned by ALIGNMENT
-    asize = ALIGN(size + WSIZE + WSIZE);
+    asize = DSIZE * ((size + DSIZE + (DSIZE - 1)) / DSIZE);
   }
   return asize;
 }
@@ -426,3 +436,76 @@ static void remove_from_free_list(void *bp) {
   // bp.next.prev = bp.prev
   SET_PREV_FREE(NEXT_FREE(bp), PREV_FREE(bp));
 }
+
+#ifdef DEBUG
+
+/*
+ * The remaining routines are heap consistency checker routines.
+ */
+
+/*
+ * Requires:
+ *   "bp" is the address of a block.
+ *
+ * Effects:
+ *   Perform a minimal check on the block "bp".
+ */
+static void checkblock(void *bp) {
+  if ((uintptr_t)bp % DSIZE)
+    printf("Error: %p is not doubleword aligned\n", bp);
+  if (GET(HDRP(bp)) != GET(FTRP(bp)))
+    printf("Error: header does not match footer\n");
+}
+
+/*
+ * Requires:
+ *   None.
+ *
+ * Effects:
+ *   Perform a minimal check of the heap for consistency.
+ */
+void checkheap(bool verbose) {
+  void *bp;
+
+  if (verbose) printf("Heap (%p):\n", heap_listp);
+
+  if (GET_SIZE(HDRP(heap_listp)) != DSIZE || !GET_ALLOC(HDRP(heap_listp)))
+    printf("Bad prologue header\n");
+  checkblock(heap_listp);
+
+  for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = (void *)NEXT_BLKP(bp)) {
+    if (verbose) printblock(bp);
+    checkblock(bp);
+  }
+
+  if (verbose) printblock(bp);
+  if (GET_SIZE(HDRP(bp)) != 0 || !GET_ALLOC(HDRP(bp)))
+    printf("Bad epilogue header\n");
+}
+
+/*
+ * Requires:
+ *   "bp" is the address of a block.
+ *
+ * Effects:
+ *   Print the block "bp".
+ */
+static void printblock(void *bp) {
+  bool halloc, falloc;
+  size_t hsize, fsize;
+
+  checkheap(false);
+  hsize = GET_SIZE(HDRP(bp));
+  halloc = GET_ALLOC(HDRP(bp));
+  fsize = GET_SIZE(FTRP(bp));
+  falloc = GET_ALLOC(FTRP(bp));
+
+  if (hsize == 0) {
+    printf("%p: end of heap\n", bp);
+    return;
+  }
+
+  printf("%p: header: [%zu:%c] footer: [%zu:%c]\n", bp, hsize,
+         (halloc ? 'a' : 'f'), fsize, (falloc ? 'a' : 'f'));
+}
+#endif  // DEBUG
