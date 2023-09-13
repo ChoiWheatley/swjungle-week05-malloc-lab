@@ -10,6 +10,7 @@
  * comment that gives a high level description of your solution.
  */
 #include <assert.h>
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,14 +20,13 @@
 #include "memlib.h"
 #include "mm.h"
 
-typedef char *byte_p;
 typedef unsigned long dword_t;
 
 int mm_init(void);
 void *mm_malloc(size_t size);
 void *mm_realloc(void *ptr, size_t size);
 static void *extend_heap(size_t words);
-static void *coalesce(byte_p bp);
+static void *coalesce(void *bp);
 static void *find_fit(size_t asize);
 static void place(void *bp, size_t asize);
 inline static size_t adjust_size(size_t size);
@@ -55,11 +55,12 @@ team_t team = {
     ""};
 
 /**Global Variables*/
-#define ALIGNMENT 8
 #define WSIZE sizeof(void *)
 #define DSIZE (2 * WSIZE)
 #define CHUNKSIZE (1 << 12)  // minimum size that can be extend
-#define MINIMUM_BLOCK_SIZE WSIZE * 2
+
+#define ALIGNMENT DSIZE
+#define MINIMUM_BLOCK_SIZE ALIGNMENT
 
 /* rounds up to the nearest multiple of ALIGNMENT */
 #define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~0x7)
@@ -80,14 +81,19 @@ team_t team = {
 #define GET_ALLOC(p) (GET(p) & 0x01)
 
 // 헤더 포인터의 주소를 가리킨다. p는 payload의 첫번째 주소를 가리킨다.
-#define HEADER_PTR(bp) (void *)((byte_p)(bp)-WSIZE)
+#define HEADER_PTR(bp) (void *)((uintptr_t)(bp)-WSIZE)
 // 푸터 포인터의 주소를 가리킨다. p는 payload의 첫번째 주소를 가리킨다.
-#define FOOTER_PTR(bp) ((byte_p)(bp) + GET_SIZE(HEADER_PTR(bp)) - DSIZE)
+#define FOOTER_PTR(bp) \
+  (void *)((uintptr_t)(bp) + GET_SIZE(HEADER_PTR(bp)) - DSIZE)
 
 // 다음 블럭의 bp(base pointer)를 가리킨다.
-#define NEXT_BLOCK_PTR(bp) (void *)((byte_p)(bp) + GET_SIZE(HEADER_PTR(bp)))
+#define NEXT_BLOCK_PTR(bp) (void *)((uintptr_t)(bp) + GET_SIZE(HEADER_PTR(bp)))
 // 이전 블럭의 bp(base pointer)를 가리킨다.
-#define PREV_BLOCK_PTR(bp) (void *)((byte_p)(bp)-GET_SIZE(((byte_p)(bp)-DSIZE)))
+#define PREV_BLOCK_PTR(bp) \
+  (void *)((uintptr_t)(bp)-GET_SIZE(((uintptr_t)(bp)-DSIZE)))
+
+typedef struct free_list {
+} free_list;
 
 /**
  * Helper Functions
@@ -95,8 +101,8 @@ team_t team = {
 static dword_t __offset(void *p);
 static size_t __get_size(void *p) { return GET_SIZE(p); }
 static bool __get_alloc(void *p) { return GET_ALLOC(p); }
-static byte_p __header_ptr(void *bp) { return HEADER_PTR(bp); }
-static byte_p __footer_ptr(void *bp) { return FOOTER_PTR(bp); }
+static void *__header_ptr(void *bp) { return HEADER_PTR(bp); }
+static void *__footer_ptr(void *bp) { return FOOTER_PTR(bp); }
 static void *__next_block_ptr(void *bp) { return NEXT_BLOCK_PTR(bp); }
 static void *__prev_block_ptr(void *bp) { return PREV_BLOCK_PTR(bp); }
 
@@ -135,7 +141,7 @@ int mm_init(void) {
 void *mm_malloc(size_t size) {
   size_t asize;       // adjusted block size
   size_t extendsize;  // amount to extend heap if no fit
-  byte_p bp;
+  void *bp;
 
   // ignore spurious requests
   if (size == 0) {
@@ -211,7 +217,7 @@ void *mm_realloc(void *bp, size_t size) {
  * # extend_heap - 지정한 블록 개수만큼 힙 영역을 추가한다.
  */
 void *extend_heap(size_t words) {
-  byte_p bp;
+  void *bp;
   size_t size = words * WSIZE;
 
   // 정렬을 유지하기 위해 words를 2의 배수로 반올림한다.
@@ -241,9 +247,9 @@ void *extend_heap(size_t words) {
  *
  * @return coalesced block pointer
  */
-void *coalesce(byte_p bp) {
-  byte_p prev_bp = PREV_BLOCK_PTR(bp);
-  byte_p next_bp = NEXT_BLOCK_PTR(bp);
+void *coalesce(void *bp) {
+  void *prev_bp = PREV_BLOCK_PTR(bp);
+  void *next_bp = NEXT_BLOCK_PTR(bp);
 
   if (GET_ALLOC(HEADER_PTR(prev_bp)) && GET_ALLOC(HEADER_PTR(next_bp))) {
     // none is freed, do nothing?
@@ -348,7 +354,7 @@ void place(void *bp, size_t asize) {
     PUT(HEADER_PTR(bp), pack_alloc);
     PUT(FOOTER_PTR(bp), pack_alloc);
     // set header and footer for free block
-    byte_p splitted_bp = NEXT_BLOCK_PTR(bp);
+    void *splitted_bp = NEXT_BLOCK_PTR(bp);
     PUT(HEADER_PTR(splitted_bp), pack_free);
     PUT(FOOTER_PTR(splitted_bp), pack_free);
   } else {
@@ -385,5 +391,5 @@ inline bool is_epilogue(void *bp) {
 }
 
 dword_t __offset(void *p) {
-  return (dword_t)((byte_p)p - (byte_p)g_heap_listp);
+  return (dword_t)((uintptr_t)p - (uintptr_t)g_heap_listp);
 }
