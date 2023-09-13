@@ -214,25 +214,25 @@ void *mm_realloc(void *bp, size_t size) {
     return NULL;
   }
 
-  if (!GET_ALLOC(HEADER(next_bp)) &&
-      asize <= my_size + next_size - MINIMUM_BLOCK_SIZE) {
-    // no need to call malloc
+  // if (!GET_ALLOC(HEADER(next_bp)) &&
+  //     asize <= my_size + next_size - MINIMUM_BLOCK_SIZE) {
+  //   // no need to call malloc
 
-    remove_from_free_list(bp);
+  //   remove_from_free_list(bp);
 
-    dword_t packed = PACK(asize, 1);
-    PUT(HEADER(bp), packed);
-    PUT(FOOTER(bp), packed);
-    // refresh free block
-    next_size = my_size + next_size - asize;
-    next_bp = NEXT_ADJ(bp);
-    packed = PACK(next_size, 0);
-    PUT(HEADER(next_bp), packed);
-    PUT(FOOTER(next_bp), packed);
+  //   dword_t packed = PACK(asize, 1);
+  //   PUT(HEADER(bp), packed);
+  //   PUT(FOOTER(bp), packed);
+  //   // refresh free block
+  //   next_size = my_size + next_size - asize;
+  //   next_bp = NEXT_ADJ(bp);
+  //   packed = PACK(next_size, 0);
+  //   PUT(HEADER(next_bp), packed);
+  //   PUT(FOOTER(next_bp), packed);
 
-    insert_in_free_list(next_bp);
-    return bp;
-  }
+  //   insert_in_free_list(next_bp);
+  //   return bp;
+  // }
 
   newptr = mm_malloc(size);
   if (newptr == NULL) return NULL;
@@ -240,9 +240,6 @@ void *mm_realloc(void *bp, size_t size) {
   if (size < copySize) copySize = size;
   memcpy(newptr, oldptr, copySize);
   mm_free(oldptr);
-
-  insert_in_free_list(oldptr);
-
   return newptr;
 }
 
