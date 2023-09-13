@@ -66,7 +66,7 @@ team_t team = {
 #define MINIMUM_BLOCK_SIZE ALIGNMENT
 
 /* rounds up to the nearest multiple of ALIGNMENT */
-#define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~0x7)
+#define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1))
 #define SIZE_T_SIZE \
   (ALIGN(sizeof(size_t)))  // returns nearest multiple of ALIGNMENT
 
@@ -80,8 +80,8 @@ team_t team = {
 #define PUT(p, val) (*(size_t *)(p) = (val))
 
 // Unpack and Read specific field from address p
-#define GET_SIZE(p) (size_t)(GET(p) & ~0x7)
-#define GET_ALLOC(p) (GET(p) & 0x01)
+#define GET_SIZE(p) (size_t)(GET(p) & ~(ALIGNMENT - 1))
+#define GET_ALLOC(p) (bool)(GET(p) & 0x01)
 
 // 헤더 포인터의 주소를 가리킨다. p는 payload의 첫번째 주소를 가리킨다.
 #define HEADER_PTR(bp) (void *)((uintptr_t)(bp)-WSIZE)
@@ -354,8 +354,8 @@ inline size_t adjust_size(size_t size) {
     asize = 2 * DSIZE;  // for header and footer
   } else {
     // size + header + footer + padding 포함한 DSIZE 기준으로 정렬된 블럭의 크기
-    // (bytes)
-    asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
+    // size + (WSIZE) + (WSIZE) of aligned by ALIGNMENT
+    asize = ALIGN(size + WSIZE + WSIZE);
   }
   return asize;
 }
