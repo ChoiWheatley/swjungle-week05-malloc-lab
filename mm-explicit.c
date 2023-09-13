@@ -22,11 +22,6 @@
 
 typedef unsigned long dword_t;
 
-typedef struct free_list {
-  uintptr_t prev;
-  uintptr_t next;
-} free_list;
-
 int mm_init(void);
 void *mm_malloc(size_t size);
 void *mm_realloc(void *ptr, size_t size);
@@ -38,9 +33,12 @@ inline static size_t adjust_size(size_t size);
 inline static bool is_prologue(void *bp);
 inline static bool is_epilogue(void *bp);
 void *first_fit(size_t asize);
+static void *first_fit_explicit(size_t asize);
+static void insert_in_free_list(void *bp);
+static void remove_from_free_list(void *bp);
 
 void *g_prologue;
-static free_list *g_free_list_head;
+static void *g_free_list_head;
 
 /*********************************************************
  * NOTE TO STUDENTS: Before you do anything else, please
@@ -64,7 +62,7 @@ team_t team = {
 #define CHUNKSIZE (1 << 12)  // minimum size that can be extend
 
 #define ALIGNMENT DSIZE
-#define MINIMUM_BLOCK_SIZE ALIGNMENT
+#define MINIMUM_BLOCK_SIZE (2 * ALIGNMENT)
 
 /* rounds up to the nearest multiple of ALIGNMENT */
 #define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1))
@@ -95,9 +93,9 @@ team_t team = {
 #define PREV_ADJ(bp) (void *)((uintptr_t)(bp)-GET_SIZE(((uintptr_t)(bp)-DSIZE)))
 
 // get next pointer in the list, NULLable
-#define NEXT_FREE(bp) (void *)(*(uintptr_t *)bp + WSIZE)
+#define NEXT_FREE(bp) (*(uintptr_t **)(bp + WSIZE))
 // get prev pointer in the list, NULLable
-#define PREV_FREE(bp) (void *)(*(uintptr_t *)bp)
+#define PREV_FREE(bp) (*(uintptr_t **)bp)
 
 /**
  * Helper Functions
@@ -138,7 +136,9 @@ int mm_init(void) {
   PUT(g_prologue + (1 * WSIZE), PACK(DSIZE, 1));  // prologue header
   PUT(g_prologue + (2 * WSIZE), PACK(DSIZE, 1));  // prologue footer
   PUT(g_prologue + (3 * WSIZE), PACK(0, 1));      // epilogue header
+
   g_prologue += (2 * WSIZE);  // points to 0-sized payload (=footer)
+  g_free_list_head = g_prologue;
 
   // Extend the empty heap with a free block of CHUNKSIZE bytes
   if (extend_heap(CHUNKSIZE / WSIZE) == NULL) {
@@ -276,7 +276,7 @@ void *coalesce(void *bp) {
     // next is only freed, change my header and footer
     size += __size_bp(next_bp);
 
-    // remove_from_free_list(NEXT_FREE(bp));
+    remove_from_free_list(NEXT_FREE(bp));
 
     PUT(HEADER(bp), PACK(size, 0));
     PUT(FOOTER(next_bp), PACK(size, 0));
@@ -285,7 +285,7 @@ void *coalesce(void *bp) {
     size += __size_bp(prev_bp);
     bp = prev_bp;
 
-    // remove_from_free_list(NEXT_FREE(bp));
+    remove_from_free_list(NEXT_FREE(bp));
 
     PUT(HEADER(bp), PACK(size, 0));
     PUT(FOOTER(bp), PACK(size, 0));
@@ -293,15 +293,15 @@ void *coalesce(void *bp) {
     // both are freed
     size += __size_bp(prev_bp) + __size_bp(next_bp);
 
-    // remove_from_free_list(NEXT_FREE(prev_bp));
-    // remove_from_free_list(NEXT_FREE(next_bp));
+    remove_from_free_list(NEXT_FREE(prev_bp));
+    remove_from_free_list(NEXT_FREE(next_bp));
 
     bp = prev_bp;
     PUT(HEADER(bp), PACK(size, 0));
     PUT(FOOTER(bp), PACK(size, 0));
   }
 
-  // insert_in_free_list(bp);
+  insert_in_free_list(bp);
 
   return bp;
 }
@@ -342,15 +342,22 @@ void place(void *bp, size_t asize) {
     // set header and footer for my block
     PUT(HEADER(bp), pack_alloc);
     PUT(FOOTER(bp), pack_alloc);
+
+    remove_from_free_list(bp);
+
     // set header and footer for free block
-    void *splitted_bp = NEXT_ADJ(bp);
-    PUT(HEADER(splitted_bp), pack_free);
-    PUT(FOOTER(splitted_bp), pack_free);
+    bp = NEXT_ADJ(bp);
+    PUT(HEADER(bp), pack_free);
+    PUT(FOOTER(bp), pack_free);
+
+    coalesce(bp);
   } else {
     // intentional internal fragmentation with padding bytes
     dword_t pack_all = PACK(old_size, 1);
     PUT(HEADER(bp), pack_all);
     PUT(FOOTER(bp), pack_all);
+
+    remove_from_free_list(bp);
   }
 }
 
@@ -379,4 +386,38 @@ inline bool is_epilogue(void *bp) {
 
 dword_t __offset(void *p) {
   return (dword_t)((uintptr_t)p - (uintptr_t)g_prologue);
+}
+
+/**
+ * @brief finds a fit for a block with `asize` bytes from the free list
+ * @improvement: special case that expand heap size in itself
+ */
+static void *first_fit_explicit(size_t asize) {
+  for (void *bp = g_free_list_head; __alloc_bp(bp) == 0; bp = __next_free(bp)) {
+    if (asize <= (size_t)__size_bp(bp)) {
+      return bp;
+    }
+  }
+  return NULL;
+}
+
+/// @brief inserts the free block pointer into the free list
+static void insert_in_free_list(void *bp) {
+  NEXT_FREE(bp) = (uintptr_t *)g_free_list_head;  // bp.next = head
+  PREV_FREE(g_free_list_head) = (uintptr_t *)bp;  // head.prev = bp
+  PREV_FREE(bp) = (uintptr_t *)NULL;              // bp.prev = NULL
+  g_free_list_head = bp;
+}
+
+/// @brief removes the free block pointer from the free list
+static void remove_from_free_list(void *bp) {
+  if (__prev_free(bp)) {
+    // bp.prev.next = bp.next
+    NEXT_FREE(__prev_free(bp)) = NEXT_FREE(bp);
+  } else {
+    // head = bp.next
+    g_free_list_head = __next_free(bp);
+  }
+  // bp.next.prev = bp.prev
+  PREV_FREE(NEXT_FREE(bp)) = __prev_free(bp);
 }
